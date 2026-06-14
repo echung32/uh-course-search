@@ -163,10 +163,12 @@ const CATALOG_PHASE2 = [
   section("20003", "MATH", "243", "001", "Calculus III"),
 ];
 
-// Preserve the faculty entry on 10005 in phase 2 as well.
+// Preserve the faculty entry on 10005 in phase 2 as well, but with a different
+// bannerId (9001→9099) — Banner's bannerId is ephemeral per-query, so a change
+// here must NOT be classified structural by the fingerprint.
 CATALOG_PHASE2.find((s) => s.courseReferenceNumber === "10005").faculty = [
   {
-    bannerId: "9001",
+    bannerId: "9099", // ephemeral per-query id changed vs phase 1; name/email stable — must NOT be "structural"
     category: "01",
     courseReferenceNumber: "10005",
     displayName: "Jane Instructor",

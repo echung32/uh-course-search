@@ -282,6 +282,13 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
   // Seat-only CRN 10001 must NOT appear in structuralCrns.
   expect(summary.structuralCrns).not.toContain("10001");
 
+  // Regression: 10005's faculty bannerId changed phase1→phase2 but the instructor
+  // (name + email) is identical. Banner's faculty bannerId is an ephemeral per-query
+  // id, so this must NOT be classified structural (else every instructor-bearing
+  // section churns details every sync and blows the Workflow step timeout).
+  expect(summary.structuralCrns).not.toContain("10005");
+  expect(summary.detailFetchedCrns).not.toContain("10005");
+
   // Tier B1 re-fetches details for new + structural only.
   const fetched = [...summary.detailFetchedCrns].sort();
   expect(fetched).toEqual(["10003", "10007"].sort());
