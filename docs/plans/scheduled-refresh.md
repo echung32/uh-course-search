@@ -4,14 +4,15 @@ Status: **shipped**.
 
 ## What shipped
 
-- Hourly cron-triggered Cloudflare Workflow `uh-course-search-refresh` (cron `0 * * * *`), defined in `web/wrangler.jsonc` `workflows` binding, class `RefreshWorkflow` in `web/src/workflows/refresh.ts`, Worker entry `web/src/worker.ts`.
+- Daily cron-triggered Cloudflare Workflow `uh-course-search-refresh` (cron `0 12 * * *` = 02:00 HST), defined in `web/wrangler.jsonc` `workflows` binding, class `RefreshWorkflow` in `web/src/workflows/refresh.ts`, Worker entry `web/src/worker.ts`.
 - Orchestrator `web/src/lib/ingest/refresh.ts`: `refreshMutableTerms` (all non-view-only terms) and `refreshTerm` (single term) — Tier A full sync + Tier B1 diff-driven detail re-fetch + Tier B2 rolling detail safety net (see Hardening bullet below).
 - Manual entry points: `POST /api/admin/refresh-run` (secret-guarded) and `yarn ingest refresh-run [--term 202710] [--delayMs 200]`.
 - Section-core diff classifier in `web/src/lib/ingest/diff.ts` (new/dropped/structural CRNs; seat fields excluded).
 - Migration `0008` (`web/migrations/0008_term_details_synced.sql`) added `term.last_details_synced_at` (since superseded and dropped by migration `0009` — see the Hardening bullet below).
-- **Content-aware delta write** (`web/src/lib/ingest/diff.ts` `classifyForWrite` + `web/src/lib/db/upsert.ts` writers): Tier A writes only new/changed/dropped sections — seat-only changes UPDATE the row without rewriting child rows; unchanged sections are skipped — cutting D1 writes on the hourly sweep. Per-row `synced_at` becomes last-modified; `term.last_synced_at` remains last-verified.
+- **Content-aware delta write** (`web/src/lib/ingest/diff.ts` `classifyForWrite` + `web/src/lib/db/upsert.ts` writers): Tier A writes only new/changed/dropped sections — seat-only changes UPDATE the row without rewriting child rows; unchanged sections are skipped — cutting D1 writes on the daily sweep. Per-row `synced_at` becomes last-modified; `term.last_synced_at` remains last-verified.
 - **Hardening (post-merge):** the Workflow now runs **bounded steps per term** (enumerate subjects → one sync step per ~40-subject session-batch via `syncSubjectBatch` → finalize → details), and **Tier B2 is rolling** — each run refreshes the `REFRESH_ROLLING_DETAIL_CRNS` (default 250) stalest detail CRNs (`getStaleDetailCrns`, never-fetched first) instead of a >7-day full pass. Migration `0009` drops `term.last_details_synced_at` (the old full-pass gate; detail freshness is now `MIN(section_detail.synced_at)`). This removed the >7-day full-pass failure mode.
 - **Hardening follow-up (details-step timeout, 2026-06-14):** the first hardened cron still errored — every hourly instance finished term #1's Tier A + finalize, then timed out on its single `details` step, so the remaining mutable terms (incl. the ~9k-section 202710) never refreshed and the site showed multi-day-stale freshness. Two root causes, both fixed: (1) Banner's `searchResults` `faculty[].bannerId` is an **ephemeral per-query id** (it shifts every fetch — proven: same instructor name/email, id +27 between two fetches seconds apart), but `structuralFingerprint` keyed faculty on it, so every section with an instructor was misclassified "structural" on every sync → a Tier B1 detail storm. The fingerprint now keys faculty on `emailAddress`/`displayName`. (2) The details phase is now **bounded into chunked steps**: `planTermDetailCrns` returns a deduped, per-run-capped (`REFRESH_ROLLING_DETAIL_CRNS`) B1∪rolling-stale set, which the Workflow fetches in `DETAIL_STEP_SIZE`-CRN `step.do`s, so no step nears the 10-min timeout regardless of CRN count. **Dormant follow-up:** the instructor/contact-card tables (`section_faculty`/`instructor`, `/api/instructor`) also key on the ephemeral `bannerId` (and `getContactCard` returns a *different* real `personData.bannerId`) — currently harmless because the details/instructor pass never ran in prod, but it needs a Tier-B fix (key instructors on a stable id/email) before that linkage is relied upon.
+- **Cadence change to daily (2026-06-14):** once the timeout was fixed, a full run legitimately takes ~90 min (4 terms × bounded Tier A + chunked details). With the hourly cron, each fire spawned a new instance on top of the still-running prior one, so two instances re-synced the same top terms concurrently — duplicated Banner load and D1 writes — while the tail terms (`202643`/`202640`, last in `code DESC`) stayed starved. Switched the cron to **daily** (`0 12 * * *` = 02:00 HST): one fire completes all terms with 22+ h of headroom, so no overlap and no concurrency guard needed. Trade-off: seat/section freshness is now ≤24 h (was ≤1 h), and the rolling B2 detail window for the ~9k-section term stretches to ~37 days at the default 250-CRN cap — raise `REFRESH_ROLLING_DETAIL_CRNS` to shorten it (see Tier B2 below).
 
 ## Problem
 
@@ -54,10 +55,10 @@ So the tiers are organized by **frequency-by-volatility**, not by "seats vs ever
 
 ## Design
 
-### Tier A — full sync, hourly
+### Tier A — full sync, daily
 
-Re-run `syncTerm` on every `is_view_only = 0` term every hour. ~1k requests total across the four
-mutable terms; well inside paid limits; keeps seats/waitlist/meeting-times/faculty fresh to ≤1h.
+Re-run `syncTerm` on every `is_view_only = 0` term once a day. ~1k requests total across the four
+mutable terms; well inside paid limits; keeps seats/waitlist/meeting-times/faculty fresh to ≤24h.
 Per-CRN seat refresh is **not** used for whole-term freshness (it is ~25× costlier for less data).
 
 In the Workflow this runs as bounded steps: one `enumerateSyncSubjects` step then one `syncSubjectBatch` step per ~40-subject session-batch, so no single step approaches the 10-minute step timeout at any term size. `syncTerm` (CLI/admin) composes the same pieces.
@@ -86,11 +87,11 @@ cross-list CRNs, `syllabus`, `reservedSeatSummary` is always `null` in search; c
 a section row at all). So a fee/restriction/text edit on a section whose *core* did not move is
 invisible to the diff. B2 closes this gap.
 
-**B2 — rolling safety net.** Each run refreshes the K stalest detail CRNs for a term — `getStaleDetailCrns` orders `course_section LEFT JOIN section_detail` by `COALESCE(section_detail.synced_at, 0) ASC` (never-fetched first), bounded by `REFRESH_ROLLING_DETAIL_CRNS` (default 250, dashboard-editable). This is the only thing that catches the invisible detail/text edits, and it fills never-viewed details over time. Sized so even the ~9k-section term cycles every detail within ~1.5 days at hourly cadence (9170 / 250 ≈ 37 runs); a small term cycles in a single run. Bounded per run, and the B1∪B2 detail set is fetched across multiple `DETAIL_STEP_SIZE`-CRN Workflow steps (`planTermDetailCrns` + chunked `details … chunk N` steps), so no single step nears the 10-min timeout — even when many CRNs need details.
+**B2 — rolling safety net.** Each run refreshes the K stalest detail CRNs for a term — `getStaleDetailCrns` orders `course_section LEFT JOIN section_detail` by `COALESCE(section_detail.synced_at, 0) ASC` (never-fetched first), bounded by `REFRESH_ROLLING_DETAIL_CRNS` (default 250, dashboard-editable). This is the only thing that catches the invisible detail/text edits, and it fills never-viewed details over time. At the **daily** cadence the default cap of 250/run cycles a small term in a single run, but the ~9k-section term takes ~37 runs ≈ 37 days to cover every detail once (9170 / 250). Raise `REFRESH_ROLLING_DETAIL_CRNS` (dashboard-editable) to shorten that window — e.g. 1500/run cycles the big term in ~6 days — at the cost of a longer detail phase (more `DETAIL_STEP_SIZE`-CRN steps) per run. Bounded per run, and the B1∪B2 detail set is fetched across multiple `DETAIL_STEP_SIZE`-CRN Workflow steps (`planTermDetailCrns` + chunked `details … chunk N` steps), so no single step nears the 10-min timeout — even when many CRNs need details.
 
 ### Orchestration — one cron-triggered Cloudflare Workflow
 
-A `WorkflowEntrypoint` (`RefreshWorkflow`) triggered **hourly** by a native cron schedule (no
+A `WorkflowEntrypoint` (`RefreshWorkflow`) triggered **daily** by a native cron schedule (no
 separate `scheduled()` entrypoint). Workflows provide durable, resumable steps with per-step
 retry/backoff — the right primitive for multi-hundred-request sweeps that must survive transient
 Banner failures.
@@ -100,7 +101,7 @@ It runs on the Worker runtime, calling the existing `lib/ingest/*` functions dir
 entry, so it runs regardless. The Node `yarn ingest` CLI is retained unchanged for manual and
 historical-backfill use.
 
-Per hourly run:
+Per daily run:
 
 1. **`refreshTerms`** (~1–2 requests) — recompute `is_view_only` and pick up new terms, so terms
    that flipped to view-only drop out of the sweep and new ones join.
@@ -138,6 +139,6 @@ platform constraint.
 ## Out of scope
 
 - A manual "refresh now" button in the UI.
-- Near-real-time (sub-15-minute) seat counts and per-CRN seat top-ups between syncs — the hourly full
+- Near-real-time seat counts and per-CRN seat top-ups between syncs — the daily full
   sync covers seats ~25× more cheaply, and tighter cadence risks tripping Banner's session throttle.
 - Refreshing view-only (immutable) terms — by definition they no longer change.

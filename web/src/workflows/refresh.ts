@@ -13,7 +13,7 @@ import { deleteSectionDetails, markTermSynced } from "@/lib/db/upsert";
 import type { SectionDiff } from "@/lib/ingest/diff";
 
 /**
- * Hourly scheduled refresh of non-view-only terms (docs/plans/scheduled-refresh.md).
+ * Daily scheduled refresh of non-view-only terms (docs/plans/scheduled-refresh.md).
  *
  * Each term is broken into bounded steps so no single step approaches the
  * 10-minute Cloudflare Workflow step timeout, even for the 9 k-section term:
@@ -40,7 +40,7 @@ import type { SectionDiff } from "@/lib/ingest/diff";
  *   - Cold start: a never-backfilled term classifies every section as "new", so its
  *     details phase has many CRNs — but each step is bounded by DETAIL_STEP_SIZE,
  *     and the total is capped by REFRESH_ROLLING_DETAIL_CRNS. In practice mutable
- *     terms are backfilled out-of-band (admin sync / sync-details) before the hourly
+ *     terms are backfilled out-of-band (admin sync / sync-details) before the daily
  *     sweep ever sees them, so the steady-state diff is small.
  *   - sync_run bookkeeping: unlike the CLI/admin syncTerm path, the bounded Workflow
  *     does not open/close a sync_run row (a run would span ~100 steps with retries in
