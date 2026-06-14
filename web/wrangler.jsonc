@@ -4,7 +4,7 @@
   // it (dash: workers/services/view/uh-course-search).
   "name": "uh-course-search",
   // Custom Worker entry that re-exports the adapter's request handler as `fetch`
-  // plus the RefreshWorkflow class for the hourly cron-triggered Workflow binding.
+  // plus the RefreshWorkflow class for the daily cron-triggered Workflow binding.
   "main": "./src/worker.ts",
   "compatibility_date": "2026-06-01",
   // nodejs_compat_populate_process_env makes Worker vars/secrets readable via
@@ -29,14 +29,18 @@
   // Subrequest budget raised to cover Tier A full sync across multiple terms
   // (default Worker limit is 1000; each term can require ~200-400 subrequests).
   "limits": { "subrequests": 50000 },
-  // Hourly cron-triggered Workflow: refreshes all non-view-only terms each hour.
+  // Daily cron-triggered Workflow: refreshes all non-view-only terms once a day.
   // schedules on the binding eliminates the need for a separate scheduled() handler.
+  // 12:00 UTC = 02:00 HST (low-traffic); a full run is ~90 min, so a single daily
+  // fire completes all terms with no risk of overlapping the next fire. (Was hourly,
+  // but a run legitimately exceeds an hour, so hourly fires piled up and re-synced
+  // the same terms concurrently — duplicate Banner load + D1 writes.)
   "workflows": [
     {
       "binding": "REFRESH_WORKFLOW",
       "name": "uh-course-search-refresh",
       "class_name": "RefreshWorkflow",
-      "schedules": ["0 * * * *"]
+      "schedules": ["0 12 * * *"]
     }
   ],
   // Runtime config readable via process.env (see compat flag above). SIS_BASE_URL
@@ -51,6 +55,6 @@
     "COURSE_TEXT_LAZY": "1",
     "EDGE_CACHE": "1",
     "LOG_SOURCE": "0",
-    "REFRESH_ROLLING_DETAIL_CRNS": "250"
+    "REFRESH_ROLLING_DETAIL_CRNS": "1500"
   }
 }
