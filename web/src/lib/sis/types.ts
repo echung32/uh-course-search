@@ -159,9 +159,8 @@ export interface CoverageDetail {
   chunks: CoverageChunk[];
   /** Past terms are immutable snapshots — drives the dialog wording. */
   isViewOnly?: boolean;
-  /** Backfill mode: term-level anchors so the two staleness axes are explicit. */
+  /** Backfill mode: term-level anchor (last full sync). */
   lastSyncedAt?: number | null;
-  lastSeatRefreshAt?: number | null;
 }
 
 export interface SearchParams {

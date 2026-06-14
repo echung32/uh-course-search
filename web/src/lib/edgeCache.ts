@@ -40,7 +40,7 @@ function edgeCache(): CacheLike | null {
 
 /** View-only terms are immutable — cache for a week (key version pins content). */
 export const VIEW_ONLY_TTL_S = 7 * 24 * 3600;
-/** Active terms: seat data only moves on refresh (which bumps the key version). */
+/** Active terms: data only moves on a full sync (which bumps the key version). */
 export const ACTIVE_TTL_S = 3600;
 
 export interface CacheProfile {
@@ -56,7 +56,7 @@ export interface CacheProfile {
 export function termCacheProfile(meta: TermSyncMeta | null): CacheProfile | null {
   if (meta?.lastSyncedAt == null) return null;
   return {
-    version: `${meta.lastSyncedAt}.${meta.lastSeatRefreshAt ?? 0}`,
+    version: String(meta.lastSyncedAt),
     ttlSeconds: meta.isViewOnly ? VIEW_ONLY_TTL_S : ACTIVE_TTL_S,
   };
 }
