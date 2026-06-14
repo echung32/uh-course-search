@@ -295,8 +295,9 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
 
   // Rolling Tier B2 runs every refresh: it refreshes the stalest detail CRNs,
   // bounded by REFRESH_ROLLING_DETAIL_CRNS (250). With 9 sections < cap, all roll.
+  // detailsRolled = total fetched minus B1 (new ∪ structural). 9 fetched − 2 B1 = 7.
   expect(summary.detailsFullPass).toBeUndefined();
-  expect(summary.detailsRolled).toBe(9);
+  expect(summary.detailsRolled).toBe(7);
 
   // Tier A delta-write counts: 1 new (10007), 1 structural (10003), 3 seat-only
   // (10002/10004/10005 — the preceding seat-refresh wrote enrollment:35/seats:5

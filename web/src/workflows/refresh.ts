@@ -7,8 +7,9 @@ import {
   enumerateSyncSubjects,
   syncSubjectBatch,
 } from "@/lib/ingest/sync";
-import { refreshTermDetails } from "@/lib/ingest/refresh";
-import { markTermSynced } from "@/lib/db/upsert";
+import { planTermDetailCrns } from "@/lib/ingest/refresh";
+import { syncDetails } from "@/lib/ingest/details";
+import { deleteSectionDetails, markTermSynced } from "@/lib/db/upsert";
 import type { SectionDiff } from "@/lib/ingest/diff";
 
 /**
@@ -24,20 +25,23 @@ import type { SectionDiff } from "@/lib/ingest/diff";
  *                               the Workflow body (NOT via closure mutation, which is
  *                               lost on resume).
  *   3. finalize ${code}    — markTermSynced with the aggregated status.
- *   4. details ${code}     — refreshTermDetails: Tier B1 (diff-driven, bounded by the
- *                            diff) + rolling Tier B2 (bounded by REFRESH_ROLLING_DETAIL_CRNS
- *                            default 250). Safe in one step.
+ *   4. prune details ${code}     — delete section_detail rows for dropped CRNs.
+ *      plan details ${code}      — compute the deduped, capped CRN set (B1 + rolling B2).
+ *      details ${code} chunk N/M — fetch details for one DETAIL_STEP_SIZE-CRN slice;
+ *                                  repeated M times so no step nears the 10-min timeout.
  *   5. step.sleep          — 5-second pace before next term.
  *
- * Why bounded: a batch covers exactly one session's worth of subjects (~40). B1 is
- * bounded by structural/new CRNs; B2 is capped by the rolling-detail constant. No
- * step can blow the 10-min limit regardless of term size.
+ * Why bounded: a batch covers exactly one session's worth of subjects (~40). The
+ * detail phase splits into DETAIL_STEP_SIZE-CRN steps; the total is capped by
+ * REFRESH_ROLLING_DETAIL_CRNS inside planTermDetailCrns. No step can blow the
+ * 10-min limit regardless of term size or diff size.
  *
  * Two deliberate scope notes:
  *   - Cold start: a never-backfilled term classifies every section as "new", so its
- *     one-time B1 details step can be large. In practice mutable terms are backfilled
- *     out-of-band (admin sync / sync-details) before the hourly sweep ever sees them,
- *     so the steady-state B1 diff is small; the 10-min step timeout is the backstop.
+ *     details phase has many CRNs — but each step is bounded by DETAIL_STEP_SIZE,
+ *     and the total is capped by REFRESH_ROLLING_DETAIL_CRNS. In practice mutable
+ *     terms are backfilled out-of-band (admin sync / sync-details) before the hourly
+ *     sweep ever sees them, so the steady-state diff is small.
  *   - sync_run bookkeeping: unlike the CLI/admin syncTerm path, the bounded Workflow
  *     does not open/close a sync_run row (a run would span ~100 steps with retries in
  *     between). term.last_synced_at (set by markTermSynced in the finalize step) is the
@@ -52,6 +56,12 @@ const STEP_OPTS = {
 // One batch = one SIS session's worth of subjects; single-sourced from sync.ts so
 // the Workflow's batch size can't silently diverge from syncTerm's session cadence.
 const SUBJECTS_PER_BATCH = DEFAULT_SUBJECTS_PER_SESSION;
+
+// CRNs per bounded details step. Each CRN's detail fetch is ~6 Banner calls, so
+// keep batches small enough that a step stays well under the 10-min step timeout
+// even when Banner is slow. (Total per term per run is capped by
+// REFRESH_ROLLING_DETAIL_CRNS inside planTermDetailCrns.)
+const DETAIL_STEP_SIZE = 30;
 
 function chunk<T>(a: T[], n: number): T[][] {
   const out: T[][] = [];
@@ -107,12 +117,29 @@ export class RefreshWorkflow extends WorkflowEntrypoint {
         async () => markTermSynced(db, code, overallStatus, Date.now())
       );
 
-      // Step 4: Tier B1 diff-driven detail re-fetch + rolling Tier B2 (both bounded).
-      await step.do(
-        `details ${code}`,
-        STEP_OPTS,
-        async () => refreshTermDetails(db, code, aggDiff, { courseDelayMs: 200 })
+      // Step 4: details. Prune dropped, then fetch B1 + rolling B2 in BOUNDED
+      // chunk steps so no step nears the 10-min timeout regardless of CRN count.
+      if (aggDiff.droppedCrns.length > 0) {
+        await step.do(`prune details ${code}`, STEP_OPTS, async () =>
+          deleteSectionDetails(db, code, aggDiff.droppedCrns)
+        );
+      }
+      const detailCrns = await step.do(`plan details ${code}`, STEP_OPTS, async () =>
+        planTermDetailCrns(db, code, aggDiff)
       );
+      const detailBatches = chunk(detailCrns, DETAIL_STEP_SIZE);
+      for (let j = 0; j < detailBatches.length; j++) {
+        await step.do(
+          `details ${code} chunk ${j + 1}/${detailBatches.length}`,
+          STEP_OPTS,
+          async () =>
+            syncDetails(db, code, {
+              crns: detailBatches[j],
+              filters: false,
+              courseDelayMs: 200,
+            })
+        );
+      }
 
       // Pace before next term.
       await step.sleep(`pace after ${code}`, "5 seconds");
