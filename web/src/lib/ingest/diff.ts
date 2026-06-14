@@ -97,8 +97,12 @@ export function structuralFingerprint(s: CourseSection): string {
       .map((a) => a.code)
       .slice()
       .sort(),
+    // NB: faculty[].bannerId is an EPHEMERAL per-query id from Banner's
+    // searchResults (it shifts every fetch), so it must NOT be in the
+    // fingerprint — otherwise every section with an instructor churns
+    // "structural" on every sync. Key on stable identity instead.
     faculty: (s.faculty ?? [])
-      .map((f) => `${f.bannerId}:${f.displayName ?? ""}`)
+      .map((f) => `${f.emailAddress ?? ""}|${f.displayName ?? ""}`)
       .slice()
       .sort(),
     meetings: (s.meetingsFaculty ?? [])

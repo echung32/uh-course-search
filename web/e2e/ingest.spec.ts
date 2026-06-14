@@ -282,14 +282,22 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
   // Seat-only CRN 10001 must NOT appear in structuralCrns.
   expect(summary.structuralCrns).not.toContain("10001");
 
+  // Regression: 10005's faculty bannerId changed phase1→phase2 but the instructor
+  // (name + email) is identical. Banner's faculty bannerId is an ephemeral per-query
+  // id, so this must NOT be classified structural (else every instructor-bearing
+  // section churns details every sync and blows the Workflow step timeout).
+  expect(summary.structuralCrns).not.toContain("10005");
+  expect(summary.detailFetchedCrns).not.toContain("10005");
+
   // Tier B1 re-fetches details for new + structural only.
   const fetched = [...summary.detailFetchedCrns].sort();
   expect(fetched).toEqual(["10003", "10007"].sort());
 
   // Rolling Tier B2 runs every refresh: it refreshes the stalest detail CRNs,
   // bounded by REFRESH_ROLLING_DETAIL_CRNS (250). With 9 sections < cap, all roll.
+  // detailsRolled = total fetched minus B1 (new ∪ structural). 9 fetched − 2 B1 = 7.
   expect(summary.detailsFullPass).toBeUndefined();
-  expect(summary.detailsRolled).toBe(9);
+  expect(summary.detailsRolled).toBe(7);
 
   // Tier A delta-write counts: 1 new (10007), 1 structural (10003), 3 seat-only
   // (10002/10004/10005 — the preceding seat-refresh wrote enrollment:35/seats:5

@@ -84,6 +84,32 @@ export interface DetailRefreshOptions {
 }
 
 /**
+ * The deduped, per-run-capped set of CRNs to refresh details for this run:
+ * Tier B1 (new ∪ structural from the diff) first, then Tier B2 rolling-stale
+ * (getStaleDetailCrns, never-fetched first) fills the remaining budget. Capped
+ * at rollingDetailCrns() so a cold-start / high-change term can't enqueue an
+ * unbounded details phase. De-dupes so B1 and the rolling set don't double-fetch.
+ */
+export async function planTermDetailCrns(
+  db: D1Like,
+  term: string,
+  diff: SectionDiff
+): Promise<string[]> {
+  const cap = rollingDetailCrns();
+  const b1 = [...diff.newCrns, ...diff.structuralCrns];
+  const stale = await getStaleDetailCrns(db, term, cap);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const crn of [...b1, ...stale]) {
+    if (seen.has(crn)) continue;
+    seen.add(crn);
+    out.push(crn);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
  * Tier B1 (diff-driven) + Tier B2 (rolling) detail refresh for one term.
  * B1: fetch details for new ∪ structural CRNs, delete details for dropped CRNs.
  * B2: refresh the K stalest detail CRNs (never-fetched first), bounded per run.
@@ -98,26 +124,21 @@ export async function refreshTermDetails(
   const log = options.log ?? (() => {});
   const courseDelayMs = options.courseDelayMs ?? 0;
 
-  // Tier B1: re-fetch details for new + structural; delete dropped.
-  const detailFetchedCrns = [...diff.newCrns, ...diff.structuralCrns];
-  if (detailFetchedCrns.length > 0) {
-    for (const part of chunk(detailFetchedCrns, CRN_BATCH)) {
-      await syncDetails(db, term, { crns: part, filters: false, courseDelayMs, log });
-    }
-  }
+  // Prune details for dropped CRNs.
   if (diff.droppedCrns.length > 0) {
     await deleteSectionDetails(db, term, diff.droppedCrns);
   }
 
-  // Tier B2 (rolling): refresh the stalest details, bounded per run. B1's CRNs
-  // and the rolling set may overlap harmlessly (B1 just-fetched ones sort newest).
-  const staleCrns = await getStaleDetailCrns(db, term, rollingDetailCrns());
-  let detailsRolled = 0;
-  for (const part of chunk(staleCrns, CRN_BATCH)) {
+  // Bounded, deduped, capped detail set (B1 new∪structural first, then rolling B2).
+  const detailCrns = await planTermDetailCrns(db, term, diff);
+  for (const part of chunk(detailCrns, CRN_BATCH)) {
     await syncDetails(db, term, { crns: part, filters: false, courseDelayMs, log });
-    detailsRolled += part.length;
   }
 
+  // Report B1 (diff-driven) separately from the rolling remainder.
+  const b1 = new Set([...diff.newCrns, ...diff.structuralCrns]);
+  const detailFetchedCrns = detailCrns.filter((c) => b1.has(c));
+  const detailsRolled = detailCrns.filter((c) => !b1.has(c)).length;
   return { detailFetchedCrns, detailsRolled };
 }
 
