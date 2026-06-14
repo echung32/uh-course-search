@@ -72,8 +72,6 @@ function resolveSort(
 export interface TermSyncMeta {
   /** Epoch-ms of the last full backfill, or null if never backfilled (dynamic). */
   lastSyncedAt: number | null;
-  /** Epoch-ms of the last seat-only refresh, or null if never refreshed. */
-  lastSeatRefreshAt: number | null;
   /** Past terms (description ends "(View Only)") are immutable. */
   isViewOnly: boolean;
 }
@@ -82,7 +80,7 @@ export interface TermSyncMeta {
  * Sync state for one term, or null if unknown. Drives the search route's branch
  * (backfilled → SQL path; dynamic → page cache), the page cache's staleness rule
  * (view-only windows never expire), and the backfill freshness view's term-level
- * anchors (last full sync vs last seat refresh).
+ * anchor (last full sync).
  */
 export async function getTermSyncMeta(
   db: D1Like,
@@ -90,18 +88,16 @@ export async function getTermSyncMeta(
 ): Promise<TermSyncMeta | null> {
   const row = await db
     .prepare(
-      "SELECT last_synced_at, last_seat_refresh_at, is_view_only FROM term WHERE code = ?"
+      "SELECT last_synced_at, is_view_only FROM term WHERE code = ?"
     )
     .bind(term)
     .first<{
       last_synced_at: number | null;
-      last_seat_refresh_at: number | null;
       is_view_only: number;
     }>();
   if (!row) return null;
   return {
     lastSyncedAt: row.last_synced_at,
-    lastSeatRefreshAt: row.last_seat_refresh_at,
     isViewOnly: row.is_view_only === 1,
   };
 }
@@ -814,7 +810,6 @@ export async function getBackfillCoverageDetail(
     })),
     isViewOnly: meta.isViewOnly,
     lastSyncedAt: meta.lastSyncedAt,
-    lastSeatRefreshAt: meta.lastSeatRefreshAt,
   };
 }
 

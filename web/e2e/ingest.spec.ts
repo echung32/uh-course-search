@@ -213,43 +213,6 @@ test("admin sync rejects requests without the secret", async ({ request }) => {
   expect(res.status()).toBe(401);
 });
 
-test("seat refresh updates stored seat counts", async ({ request }) => {
-  const before = await request.get("/api/search", {
-    params: { term: TERM, subject: "ICS", pageMaxSize: "50" },
-  });
-  expect((await before.json()).data[0].seatsAvailable).toBe(10);
-
-  // Capture the window's freshness before the refresh (currently the full-sync time).
-  const covBefore = await (
-    await request.get("/api/coverage", { params: { term: TERM, subject: "ICS" } })
-  ).json();
-  const newestBefore = covBefore.chunks[0].newestSyncedAt as number;
-
-  const refresh = await request.post(`/api/admin/refresh-seats?term=${TERM}&subject=ICS`, {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
-  });
-  expect(refresh.ok()).toBeTruthy();
-  expect((await refresh.json()).refreshed).toBe(6);
-
-  // The mock reports 5 seats available (40 max − 35 enrolled).
-  const after = await request.get("/api/search", {
-    params: { term: TERM, subject: "ICS", pageMaxSize: "50" },
-  });
-  expect((await after.json()).data[0].seatsAvailable).toBe(5);
-
-  // The per-CRN synced_at bump from the seat refresh surfaces in the freshness grid.
-  const covAfter = await (
-    await request.get("/api/coverage", { params: { term: TERM, subject: "ICS" } })
-  ).json();
-  expect(covAfter.chunks[0].newestSyncedAt).toBeGreaterThan(newestBefore);
-
-  // A second refresh within the cooldown window is rejected.
-  const again = await request.post(`/api/admin/refresh-seats?term=${TERM}&subject=ICS`, {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
-  });
-  expect(again.status()).toBe(429);
-});
-
 // The mock's control port — matches MOCK_SIS_PORT in playwright.config.ts.
 const MOCK_ORIGIN = "http://127.0.0.1:9999";
 
@@ -299,13 +262,14 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
   expect(summary.detailsFullPass).toBeUndefined();
   expect(summary.detailsRolled).toBe(7);
 
-  // Tier A delta-write counts: 1 new (10007), 1 structural (10003), 3 seat-only
-  // (10002/10004/10005 — the preceding seat-refresh wrote enrollment:35/seats:5
-  // for those, but phase-2 carries the original enrollment:30/seats:10, so they
-  // now differ seat-only vs stored; 10001 matches stored exactly because phase-2
-  // explicitly sets enrollment:35/seats:5 matching the seat-refresh values);
-  // 1 deleted (10006); 4 unchanged (10001 + 20001/02/03).
-  expect(summary.writes).toEqual({ inserted: 1, structural: 1, seatUpdated: 3, deleted: 1, unchanged: 4 });
+  // Tier A delta-write counts (clean phase-1 → phase-2 diff):
+  //   inserted 1 (10007), deleted 1 (10006), structural 1 (10003),
+  //   seatUpdated 2 — 10001 (enrollment 30→35, seats 10→5: a real seat-only change)
+  //     and 10005 (its faculty bannerId shifts phase1→phase2; that ephemeral id
+  //     changes raw_json so the row is rewritten via the cheap row-update path, but
+  //     it is NOT structural → no detail re-fetch, per detailFetchedCrns above),
+  //   unchanged 5 (10002, 10004, 20001/02/03).
+  expect(summary.writes).toEqual({ inserted: 1, structural: 1, seatUpdated: 2, deleted: 1, unchanged: 5 });
 
   // Section counts reflect the add/drop: still 6 ICS (10001-10005 + 10007) + 3 MATH.
   expect(

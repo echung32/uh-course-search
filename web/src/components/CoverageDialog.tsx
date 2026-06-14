@@ -168,8 +168,6 @@ function BackfillBody({ detail }: { detail: CoverageDetail }) {
         </span>
       </p>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-        <dt className="text-muted-foreground">Last seat refresh</dt>
-        <dd>{detail.lastSeatRefreshAt ? relativeTime(detail.lastSeatRefreshAt) : "never"}</dd>
         <dt className="text-muted-foreground">Sections</dt>
         <dd>
           {detail.totalCount.toLocaleString()} in {detail.totalChunks} window
