@@ -65,6 +65,16 @@ export async function backfillNextTerm(
   }
 
   const details = await syncDetails(db, term, {
+    // Skip the per-instructor contact-card pass. Banner's contact-card endpoint
+    // 500s for every faculty id on these terms (confirmed 2026-06-16: the prod
+    // `instructor` table has ~2 rows against ~254k faculty links — the pass has
+    // never meaningfully populated, app-wide, including the daily refresh), so on
+    // a historical backfill it's pure wasted load: thousands of guaranteed-failing
+    // calls per term (~3.9k on the largest). Section faculty name/email already
+    // come from the catalog sync (section_faculty); only the title/dept/college
+    // CARD is unavailable — and it's unavailable everywhere until the endpoint is
+    // fixed as separate, app-wide work. Skipping keeps backfill runs fast + `ok`.
+    instructors: false,
     courseDelayMs: options.delayMs ?? 250,
     log,
   });
