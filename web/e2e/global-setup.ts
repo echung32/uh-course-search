@@ -298,5 +298,43 @@ export default function globalSetup() {
     now
   );
 
+  // Historical (view-only) fixture terms for the details-backfill selection test
+  // (e2e/ingest.spec.ts). Each is_view_only=1 (the read-path terms above are 0)
+  // and has a minimal catalog (one course_section) so the EXISTS guard passes.
+  // Negative display_order keeps them last in the term dropdown (getTerms orders
+  // display_order DESC, code DESC) so the read-path default term (202710) is
+  // unaffected. Backfill picks the NEWEST that lacks a completed `details`
+  // sync_run:
+  //   202700 — done    (details sync_run status 'ok')     → excluded
+  //   202695 — failed  (details sync_run status 'error')   → eligible (retry)
+  //   202690 — never   (no details sync_run)               → eligible
+  //   202680 — no catalog (no course_section)              → excluded (catalog-missing)
+  // ⇒ newest eligible = 202695; pending = 2; catalog-missing = 1.
+  const voTerm = db.prepare(
+    "INSERT INTO term (code, description, is_view_only, display_order, last_synced_at) VALUES (?, ?, 1, ?, ?)"
+  );
+  voTerm.run("202700", "Spring 2025", -1, SYNCED);
+  voTerm.run("202695", "Winter 2025", -2, SYNCED);
+  voTerm.run("202690", "Fall 2024", -3, SYNCED);
+  voTerm.run("202680", "Summer 2024", -4, SYNCED);
+
+  const voSection = db.prepare(
+    `INSERT INTO course_section
+       (term, crn, subject, subject_description, course_number, sequence_number,
+        subject_course, course_title, campus_description, schedule_type_desc,
+        maximum_enrollment, enrollment, seats_available, open_section, raw_json, synced_at)
+     VALUES (?, ?, 'ICS', 'Information & Computer Sciences', '111', '001',
+             'ICS 111', 'Intro', ?, 'Lecture', 40, 30, 10, 1, '{}', ?)`
+  );
+  for (const code of ["202700", "202695", "202690"]) {
+    voSection.run(code, `${code}-1`, MANOA, now);
+  }
+
+  const voRun = db.prepare(
+    "INSERT INTO sync_run (term, kind, started_at, finished_at, status) VALUES (?, 'details', ?, ?, ?)"
+  );
+  voRun.run("202700", now, now, "ok");
+  voRun.run("202695", now, now, "error");
+
   db.close();
 }

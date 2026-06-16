@@ -393,6 +393,61 @@ export async function getStaleDetailCrns(
   return results.map((r) => r.crn);
 }
 
+/**
+ * Shared WHERE predicate for "view-only term that still needs a details backfill":
+ * catalog present (course_section rows exist) AND no completed details pass
+ * (no sync_run with kind='details' and status ok/partial). A run that died with
+ * status 'error' (or never ran) leaves no qualifying row, so the term stays
+ * eligible and is retried. Aliased `t` for the term row.
+ */
+const BACKFILL_PENDING_PREDICATE = `
+  t.is_view_only = 1
+  AND EXISTS (SELECT 1 FROM course_section cs WHERE cs.term = t.code)
+  AND NOT EXISTS (
+        SELECT 1 FROM sync_run r
+         WHERE r.term = t.code AND r.kind = 'details'
+           AND r.status IN ('ok', 'partial'))`;
+
+/**
+ * The newest historical (view-only) term still needing a course-details backfill,
+ * or null when every view-only term is backfilled. Newest term code first so the
+ * most-recently-relevant history fills in first.
+ */
+export async function getNextBackfillTerm(db: D1Like): Promise<string | null> {
+  const { results } = await db
+    .prepare(
+      `SELECT t.code AS code FROM term t
+        WHERE ${BACKFILL_PENDING_PREDICATE}
+        ORDER BY t.code DESC
+        LIMIT 1`
+    )
+    .all<{ code: string }>();
+  return results[0]?.code ?? null;
+}
+
+/** Count of view-only terms still pending a details backfill (same predicate). */
+export async function countBackfillTermsPending(db: D1Like): Promise<number> {
+  const { results } = await db
+    .prepare(`SELECT COUNT(*) AS n FROM term t WHERE ${BACKFILL_PENDING_PREDICATE}`)
+    .all<{ n: number }>();
+  return results[0]?.n ?? 0;
+}
+
+/**
+ * Count of view-only terms whose catalog isn't synced (no course_section rows) —
+ * these are skipped by the backfill and surfaced as an FYI (sync them first).
+ */
+export async function countViewOnlyTermsMissingCatalog(db: D1Like): Promise<number> {
+  const { results } = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM term t
+        WHERE t.is_view_only = 1
+          AND NOT EXISTS (SELECT 1 FROM course_section cs WHERE cs.term = t.code)`
+    )
+    .all<{ n: number }>();
+  return results[0]?.n ?? 0;
+}
+
 export interface Instructor {
   bannerId: string;
   displayName: string | null;
