@@ -17,12 +17,14 @@
  *   yarn ingest sync [--term 202730] [--delayMs 250] [--subjectsPerSession N]
  *   yarn ingest sync-details --term 202730 [--delayMs 250] [--no-sections] ...
  *   yarn ingest refresh-run [--term 202710] [--delayMs 200]
+ *   yarn ingest backfill [--term 202700] [--delayMs 250] [--dryRun]
  */
 import { getDb } from "@/lib/db/client";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { syncTerm } from "@/lib/ingest/sync";
 import { syncDetails } from "@/lib/ingest/details";
 import { refreshMutableTerms } from "@/lib/ingest/refresh";
+import { backfillNextTerm } from "@/lib/ingest/backfill";
 
 type Flags = Record<string, string | boolean>;
 
@@ -110,9 +112,20 @@ async function main() {
       break;
     }
 
+    case "backfill": {
+      const result = await backfillNextTerm(db, {
+        term: typeof flags.term === "string" ? flags.term : undefined,
+        dryRun: flags.dryRun === true,
+        delayMs: num(flags.delayMs) ?? 250,
+        log,
+      });
+      console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+      break;
+    }
+
     default:
       console.error(
-        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run> [flags]"
+        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill> [flags]"
       );
       process.exit(1);
   }
