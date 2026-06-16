@@ -30,6 +30,22 @@ function commonHeaders(cookieHeader: string, token: string): HeadersInit {
   };
 }
 
+/**
+ * Throw on a non-OK Banner response, cancelling the body first.
+ *
+ * On Cloudflare Workers an unread Response body holds an open connection against
+ * a small concurrency limit. Throwing on `!res.ok` without draining leaks one
+ * connection per failed request; during a Banner outage (e.g. the early-morning
+ * HST maintenance window) those leaks pile up across the refresh Workflow's step
+ * retries until the runtime force-cancels a "stalled HTTP response ... to prevent
+ * deadlock" and the whole run throws. Cancelling the body keeps a transient
+ * downtime from cascading into that deadlock.
+ */
+async function failOnResponse(res: Response, label: string): Promise<never> {
+  await res.body?.cancel();
+  throw new Error(`${label}: ${res.status} ${res.statusText}`);
+}
+
 export async function establishSession(termCode: string): Promise<SisSession> {
   const uniqueSessionId = generateUniqueSessionId();
 
@@ -47,9 +63,7 @@ export async function establishSession(termCode: string): Promise<SisSession> {
     }
   );
 
-  if (!phase1Res.ok) {
-    throw new Error(`Phase 1 failed: ${phase1Res.status} ${phase1Res.statusText}`);
-  }
+  if (!phase1Res.ok) await failOnResponse(phase1Res, "Phase 1 failed");
 
   const cookieJar = parseCookies(phase1Res.headers);
   const phase1Html = await phase1Res.text();
@@ -95,6 +109,9 @@ export async function establishSession(termCode: string): Promise<SisSession> {
   for (const [name, value] of phase3Cookies.entries()) {
     cookieJar.set(name, value);
   }
+  // We only need Phase 3's headers (the 302's Set-Cookie); drain the body so the
+  // connection is released rather than held open against the Workers limit.
+  await phase3Res.body?.cancel();
 
   // Rebuild cookie string after possible updates
   const updatedJsessionId = cookieJar.get("JSESSIONID") ?? jsessionId;
@@ -119,9 +136,7 @@ export async function establishSession(termCode: string): Promise<SisSession> {
     },
   });
 
-  if (!phase4Res.ok) {
-    throw new Error(`Phase 4 failed: ${phase4Res.status} ${phase4Res.statusText}`);
-  }
+  if (!phase4Res.ok) await failOnResponse(phase4Res, "Phase 4 failed");
 
   const phase4Html = await phase4Res.text();
   const tokenB = extractSynchronizerToken(phase4Html);
@@ -159,9 +174,10 @@ export async function resetSearchForm(session: SisSession): Promise<void> {
     headers: commonHeaders(sessionCookieString(session), session.tokenB),
   });
 
-  if (!res.ok) {
-    throw new Error(`resetDataForm failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "resetDataForm failed");
+  // Success returns the literal "true"; we ignore it, so drain the body to
+  // release the connection (this runs before every search — a per-search leak).
+  await res.body?.cancel();
 }
 
 export async function getTerms(
@@ -187,9 +203,7 @@ export async function getTerms(
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`getTerms failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "getTerms failed");
 
   const json = await res.json() as Array<{ code: string; description: string }>;
   return json.map((item) => ({ code: item.code, description: item.description }));
@@ -222,9 +236,7 @@ export async function getSubjects(
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`getSubjects failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "getSubjects failed");
 
   const json = await res.json() as Array<{ code: string; description: string }>;
   return json.map((item) => ({ code: item.code, description: item.description }));
@@ -265,9 +277,7 @@ export async function getEnrollmentInfo(
     body: body.toString(),
   });
 
-  if (!res.ok) {
-    throw new Error(`getEnrollmentInfo failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "getEnrollmentInfo failed");
 
   const html = await res.text();
   return {
@@ -321,9 +331,7 @@ export async function getFilterOptions(
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`get_${kind} failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, `get_${kind} failed`);
 
   const json = (await res.json()) as Array<{ code: string; description: string }>;
   return json.map((item) => ({ code: item.code, description: item.description }));
@@ -352,11 +360,7 @@ export async function getCatalogDetails(
     body: body.toString(),
   });
 
-  if (!res.ok) {
-    throw new Error(
-      `getSectionCatalogDetails failed: ${res.status} ${res.statusText}`
-    );
-  }
+  if (!res.ok) await failOnResponse(res, "getSectionCatalogDetails failed");
 
   return res.text();
 }
@@ -377,9 +381,7 @@ async function postSectionFragment(
     },
     body: body.toString(),
   });
-  if (!res.ok) {
-    throw new Error(`${endpoint} failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, `${endpoint} failed`);
   return res.text();
 }
 
@@ -498,9 +500,7 @@ export async function getContactCard(
     sisUrl(`/ssb/contactCard/retrieveData?${params.toString()}`),
     { method: "GET", headers: commonHeaders(sessionCookieString(session), session.tokenB) }
   );
-  if (!res.ok) {
-    throw new Error(`contactCard failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "contactCard failed");
   const json = (await res.json()) as {
     data?: { personData?: Record<string, any> };
   };
@@ -567,9 +567,7 @@ export async function searchCourses(
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`searchCourses failed: ${res.status} ${res.statusText}`);
-  }
+  if (!res.ok) await failOnResponse(res, "searchCourses failed");
 
   return res.json() as Promise<SearchResultsResponse>;
 }

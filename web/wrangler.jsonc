@@ -31,16 +31,19 @@
   "limits": { "subrequests": 50000 },
   // Daily cron-triggered Workflow: refreshes all non-view-only terms once a day.
   // schedules on the binding eliminates the need for a separate scheduled() handler.
-  // 12:00 UTC = 02:00 HST (low-traffic); a full run is ~90 min, so a single daily
-  // fire completes all terms with no risk of overlapping the next fire. (Was hourly,
-  // but a run legitimately exceeds an hour, so hourly fires piled up and re-synced
-  // the same terms concurrently — duplicate Banner load + D1 writes.)
+  // 08:00 UTC = 22:00 HST (10 PM, low-traffic); a full run is ~90 min, so it finishes
+  // (~23:30 HST) well before Banner's early-morning (~02:00 HST) maintenance window
+  // and a single daily fire never overlaps the next. (Was 12:00 UTC = 02:00 HST, but
+  // that landed inside the maintenance window: Banner served errors and the run threw.
+  // Was hourly before that, but a run legitimately exceeds an hour, so hourly fires
+  // piled up and re-synced the same terms concurrently — duplicate Banner load + D1
+  // writes.)
   "workflows": [
     {
       "binding": "REFRESH_WORKFLOW",
       "name": "uh-course-search-refresh",
       "class_name": "RefreshWorkflow",
-      "schedules": ["0 12 * * *"]
+      "schedules": ["0 8 * * *"]
     }
   ],
   // Runtime config readable via process.env (see compat flag above). SIS_BASE_URL
