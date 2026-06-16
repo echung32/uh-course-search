@@ -317,3 +317,37 @@ test("scheduled refresh: rolling Tier B2 refreshes stale details every run", asy
   });
   expect(unchanged.ok()).toBeTruthy();
 });
+
+test("backfill selects the newest view-only term missing details", async ({ request }) => {
+  // Fixture view-only terms (global-setup.ts): 202700 done (ok), 202695 failed
+  // (error → eligible), 202690 never-run (eligible), 202680 no catalog (skipped).
+  // dryRun = pure D1 selection, no Banner. Newest eligible is 202695.
+  const res = await request.post("/api/admin/backfill?dryRun=1", {
+    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  });
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body).toMatchObject({
+    ok: true,
+    term: "202695", // newest eligible (202700 excluded: ok details run)
+    done: false,
+    remaining: 2, // 202695 + 202690
+    catalogMissing: 1, // 202680 has no course_section
+  });
+  // dryRun must not touch Banner → no details sub-result.
+  expect(body.details).toBeUndefined();
+
+  // Forcing the done term still selects it (manual override), proving `term=`
+  // bypasses the auto-selection (dryRun reports it without running).
+  const forced = await request.post("/api/admin/backfill?dryRun=1&term=202700", {
+    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  });
+  expect((await forced.json()).term).toBe("202700");
+});
+
+test("backfill admin route requires the secret", async ({ request }) => {
+  const res = await request.post("/api/admin/backfill?dryRun=1", {
+    headers: { "content-type": "application/json" },
+  });
+  expect(res.status()).toBe(401);
+});
