@@ -159,12 +159,22 @@ function findLocalD1File(sentinelTable: string, override?: string): string {
   );
   for (const f of candidates) {
     const path = join(dir, f);
-    const db = new DatabaseSync(path, { readOnly: true });
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(path, { readOnly: true });
+    } catch {
+      // Not a valid SQLite file (e.g. a stray/corrupt file in the dir); skip it
+      // rather than letting "file is not a database" mask the real DB.
+      continue;
+    }
     try {
       const row = db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
         .get(sentinelTable);
       if (row) return path;
+    } catch {
+      // A malformed candidate can throw on query too; skip it.
+      continue;
     } finally {
       db.close();
     }
@@ -206,7 +216,7 @@ export function localSqliteD1(filePath?: string): D1Like {
   // Foreign keys are intentionally OFF to match D1, which does not enforce FK
   // constraints by default. node:sqlite enables them by default, so it must be
   // disabled explicitly. Child rows are pruned explicitly in the upsert path.
-  const db = new DatabaseSync(filePath ?? findLocalD1File("course_section"), {
+  const db = new DatabaseSync(filePath ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE"), {
     enableForeignKeyConstraints: false,
   });
   return {
