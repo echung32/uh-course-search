@@ -178,6 +178,9 @@ export default function globalSetup() {
   term.run("202710", "Fall 2026", 2, SYNCED);
   term.run("202730", "Spring 2026", 1, SYNCED);
   term.run("202740", "Summer 2026", 0, null);
+  // Historical term for the analytics enrollment-trend fixture (202610 rollups).
+  // Negative display_order keeps it out of the read-path search tests' dropdown.
+  term.run("202610", "Fall 2025", -10, SYNCED);
 
   const insert = db.prepare(
     `INSERT INTO course_section
@@ -370,6 +373,43 @@ export default function globalSetup() {
       now
     );
   }
+
+  // ── analytics rollup fixture (read-path analytics e2e) ──
+  // ICS 1110 across two terms at Manoa, plus facet rows, so the four charts
+  // render real lines/areas/bars. Independent of the search fixture.
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), {
+    enableForeignKeyConstraints: false,
+  });
+  for (const t of ["course_term_stats", "term_facet_stats", "analytics_meta"]) {
+    adb.exec(`DELETE FROM ${t};`);
+  }
+  const cts = adb.prepare(
+    `INSERT INTO course_term_stats
+       (term, subject, course_number, subject_course, course_title, campus,
+        sections, total_enr, total_cap, capped_sections, total_wait, open_sections)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  // ICS 1110: 202610 → 50 enrolled, 202710 → 70 enrolled (Manoa).
+  cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 50, 80, 2, 5, 2);
+  cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 70, 80, 2, 8, 1);
+  // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
+  cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
+
+  const tfs = adb.prepare(
+    `INSERT INTO term_facet_stats
+       (term, facet, facet_value, sections, total_enr, total_cap, capped_sections, total_wait)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  tfs.run("202610", "campus", "University of Hawaii at Manoa", 2, 50, 80, 2, 5);
+  tfs.run("202710", "campus", "University of Hawaii at Manoa", 3, 109, 120, 3, 20);
+  tfs.run("202610", "schedule_type", "Lecture", 2, 50, 80, 2, 5);
+  tfs.run("202710", "schedule_type", "Lecture", 2, 70, 80, 2, 8);
+  tfs.run("202710", "schedule_type", "Online", 1, 39, 40, 1, 12);
+  adb.prepare(
+    `INSERT INTO analytics_meta (key, value) VALUES ('rollups_version', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run("1700000000000");
+  adb.close();
 
   db.close();
 }
