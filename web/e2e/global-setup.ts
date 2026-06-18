@@ -175,7 +175,6 @@ export default function globalSetup() {
     "instructor",
     "subject",
     "sync_run",
-    "enrollment_snapshot",
     "term",
   ]) {
     db.exec(`DELETE FROM ${table};`);
