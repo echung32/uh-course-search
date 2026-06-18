@@ -61,6 +61,21 @@ export function termCacheProfile(meta: TermSyncMeta | null): CacheProfile | null
   };
 }
 
+/** Analytics dashboard TTL: rollups recompute once daily (RefreshWorkflow). */
+export const ANALYTICS_TTL_S = 24 * 3600;
+
+/**
+ * Cache profile for the analytics routes. The rollups for historical terms are
+ * immutable and current terms recompute once per daily refresh, so a UTC-date
+ * version key is correct AND needs zero D1 reads to compute (unlike the term
+ * routes, whose version is a per-term sync timestamp). A manual mid-day
+ * recompute won't invalidate until the next day — acceptable for this dashboard.
+ */
+export function analyticsCacheProfile(): CacheProfile {
+  const utcDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return { version: `analytics-${utcDate}`, ttlSeconds: ANALYTICS_TTL_S };
+}
+
 /**
  * Serves `request` from the edge cache, or runs `produce` and caches its
  * response (200s only). The synthetic key host is never fetched — it just
