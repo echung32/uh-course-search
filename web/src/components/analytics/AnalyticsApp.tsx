@@ -27,10 +27,13 @@ export function AnalyticsApp({
   terms,
   courses,
   campuses,
+  rollupTerms,
 }: {
   terms: TermItem[];
   courses: CourseOption[];
   campuses: string[];
+  /** Term codes that actually have rollup data, for the range selector. */
+  rollupTerms: string[];
 }) {
   const termLabelMap = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -41,6 +44,45 @@ export function AnalyticsApp({
     (code: string) => termLabelMap.get(code) ?? code,
     [termLabelMap]
   );
+
+  // ── Term range (applies to the three time-series charts) ──
+  // Codes are zero-padded (e.g. "202610"), so lexical sort == chronological.
+  const sortedTerms = React.useMemo(
+    () => [...rollupTerms].sort(),
+    [rollupTerms]
+  );
+  const oldest = sortedTerms[0] ?? "";
+  const newest = sortedTerms[sortedTerms.length - 1] ?? "";
+  // "" means "open end" — default is the full range (current behaviour).
+  const [fromTerm, setFromTerm] = React.useState("");
+  const [toTerm, setToTerm] = React.useState("");
+  const lo = fromTerm || oldest;
+  const hi = toTerm || newest;
+  // Tolerate a reversed pick by ordering the bounds.
+  const rangeLo = lo <= hi ? lo : hi;
+  const rangeHi = lo <= hi ? hi : lo;
+  const inRange = React.useCallback(
+    (code: string) =>
+      (!rangeLo || code >= rangeLo) && (!rangeHi || code <= rangeHi),
+    [rangeLo, rangeHi]
+  );
+  const termRangeOptions: ComboboxOption[] = React.useMemo(
+    () => sortedTerms.map((c) => ({ value: c, label: termLabel(c) })),
+    [sortedTerms, termLabel]
+  );
+  // "Last N years" preset: first term whose year prefix is within N of newest.
+  function setLastYears(years: number) {
+    if (!newest) return;
+    const cutoff = Number(newest.slice(0, 4)) - years;
+    const first = sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff);
+    setFromTerm(first ?? oldest);
+    setToTerm("");
+  }
+  function resetRange() {
+    setFromTerm("");
+    setToTerm("");
+  }
+  const isFullRange = fromTerm === "" && toTerm === "";
 
   // ── Chart #1: enrollment over time ──
   const courseOptions: ComboboxOption[] = React.useMemo(
@@ -88,8 +130,11 @@ export function AnalyticsApp({
     setCampus(biggestCampus);
   }, [biggestCampus]);
   const shownPoints = React.useMemo(
-    () => (campus ? trend.filter((p) => p.campus === campus) : trend),
-    [campus, trend]
+    () =>
+      trend.filter(
+        (p) => inRange(p.term) && (!campus || p.campus === campus)
+      ),
+    [campus, trend, inRange]
   );
 
   // ── Chart #4: university trend ──
@@ -101,6 +146,10 @@ export function AnalyticsApp({
       .then((d) => setUni(d.points ?? []))
       .catch(() => setUni([]));
   }, [facet]);
+  const uniInRange = React.useMemo(
+    () => uni.filter((p) => inRange(p.term)),
+    [uni, inRange]
+  );
 
   // ── Chart #5: delivery mode ──
   const [delivery, setDelivery] = React.useState<FacetTrendPoint[]>([]);
@@ -110,6 +159,10 @@ export function AnalyticsApp({
       .then((d) => setDelivery(d.points ?? []))
       .catch(() => setDelivery([]));
   }, []);
+  const deliveryInRange = React.useMemo(
+    () => delivery.filter((p) => inRange(p.term)),
+    [delivery, inRange]
+  );
 
   // ── Chart #2: fill-rate leaderboard ──
   const termOptions: ComboboxOption[] = React.useMemo(
@@ -139,6 +192,43 @@ export function AnalyticsApp({
 
   return (
     <div className="space-y-6">
+      <div className="rounded-lg border bg-card p-4">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+          <div>
+            <p className="mb-1 text-sm font-medium">Term range</p>
+            <div className="flex items-center gap-2">
+              <div className="w-40">
+                <Combobox
+                  options={termRangeOptions}
+                  value={fromTerm}
+                  onChange={setFromTerm}
+                  clearLabel={oldest ? `Earliest (${termLabel(oldest)})` : "Earliest"}
+                  placeholder="Earliest"
+                  searchPlaceholder="Search terms"
+                />
+              </div>
+              <span className="text-sm text-muted-foreground">to</span>
+              <div className="w-40">
+                <Combobox
+                  options={termRangeOptions}
+                  value={toTerm}
+                  onChange={setToTerm}
+                  clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
+                  placeholder="Latest"
+                  searchPlaceholder="Search terms"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(3)}>Last 3 yrs</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(5)}>Last 5 yrs</Button>
+            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} onClick={resetRange}>All time</Button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below (not the leaderboard).</p>
+      </div>
+
       <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">
         <div className="mb-3 flex flex-wrap gap-2">
           <div className="max-w-xs flex-1">
@@ -169,11 +259,11 @@ export function AnalyticsApp({
           <Button type="button" size="sm" variant={facet === "campus" ? "default" : "outline"} onClick={() => setFacet("campus")}>By campus</Button>
           <Button type="button" size="sm" variant={facet === "college" ? "default" : "outline"} onClick={() => setFacet("college")}>By college</Button>
         </div>
-        <UniversityTrend points={uni} termLabel={termLabel} />
+        <UniversityTrend points={uniInRange} termLabel={termLabel} />
       </Section>
 
       <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
-        <DeliveryModeShift points={delivery} termLabel={termLabel} />
+        <DeliveryModeShift points={deliveryInRange} termLabel={termLabel} />
       </Section>
 
       <Section title="Hardest to get into" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">

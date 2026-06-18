@@ -2,18 +2,20 @@
 import Layout from "../layouts/Layout.astro";
 import { AnalyticsApp } from "../components/analytics/AnalyticsApp";
 import { fetchTerms } from "../lib/search";
-import { fetchCampuses, fetchCourseOptions } from "../lib/analytics";
+import { fetchCampuses, fetchCourseOptions, fetchRollupTerms } from "../lib/analytics";
 
 let terms: Awaited<ReturnType<typeof fetchTerms>> = [];
 let courses: Awaited<ReturnType<typeof fetchCourseOptions>> = [];
 let campuses: string[] = [];
+let rollupTerms: string[] = [];
 let fetchError: string | null = null;
 
 try {
-  [terms, courses, campuses] = await Promise.all([
+  [terms, courses, campuses, rollupTerms] = await Promise.all([
     fetchTerms(),
     fetchCourseOptions(),
     fetchCampuses(),
+    fetchRollupTerms(),
   ]);
 } catch (err) {
   fetchError = "Unable to load analytics data. Please try again later.";
@@ -36,7 +38,7 @@ try {
           {fetchError}
         </div>
       ) : (
-        <AnalyticsApp terms={terms} courses={courses} campuses={campuses} client:only="react" />
+        <AnalyticsApp terms={terms} courses={courses} campuses={campuses} rollupTerms={rollupTerms} client:only="react" />
       )
     }
   </div>
