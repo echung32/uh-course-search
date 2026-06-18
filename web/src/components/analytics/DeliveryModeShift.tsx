@@ -8,10 +8,11 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
 import { pivotByTerm, type FacetTrendPoint } from "./UniversityTrend";
+import { ChartLegend } from "./ChartLegend";
+import { ChartTooltip } from "./ChartTooltip";
 
 const PALETTE = ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2"];
 
@@ -47,29 +48,35 @@ export function DeliveryModeShift({
     return <p className="text-sm text-muted-foreground">No data.</p>;
   }
   return (
-    <ResponsiveContainer width="100%" height={320}>
-      <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-        <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
-        <YAxis fontSize={12} unit="%" domain={[0, 100]} />
-        <Tooltip
-          labelFormatter={(label) => termLabel(String(label))}
-          formatter={(v) => `${Number(v).toFixed(1)}%`}
-        />
-        <Legend />
-        {keys.map((k, i) => (
-          <Area
-            key={k}
-            type="monotone"
-            dataKey={k}
-            name={k}
-            stackId="1"
-            stroke={PALETTE[i % PALETTE.length]}
-            fill={PALETTE[i % PALETTE.length]}
-            fillOpacity={0.7}
+    <div>
+      <ResponsiveContainer width="100%" height={320}>
+        <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+          <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
+          <YAxis fontSize={12} unit="%" domain={[0, 100]} />
+          <Tooltip
+            content={
+              <ChartTooltip
+                labelFormatter={termLabel}
+                valueFormatter={(v) => `${v.toFixed(1)}%`}
+              />
+            }
           />
-        ))}
-      </AreaChart>
-    </ResponsiveContainer>
+          {keys.map((k, i) => (
+            <Area
+              key={k}
+              type="monotone"
+              dataKey={k}
+              name={k}
+              stackId="1"
+              stroke={PALETTE[i % PALETTE.length]}
+              fill={PALETTE[i % PALETTE.length]}
+              fillOpacity={0.7}
+            />
+          ))}
+        </AreaChart>
+      </ResponsiveContainer>
+      <ChartLegend keys={keys} palette={PALETTE} />
+    </div>
   );
 }

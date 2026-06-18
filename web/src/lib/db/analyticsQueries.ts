@@ -88,8 +88,15 @@ export async function getFillRateLeaderboard(
   db: D1Like,
   term: string,
   limit: number,
-  minSections: number
+  minSections: number,
+  campus?: string
 ): Promise<LeaderboardRow[]> {
+  // course_term_stats is keyed per (term, course, campus), so a campus filter is
+  // a plain WHERE — no schema change needed. Empty campus = summed across all.
+  const campusFilter = campus ? "AND campus = ?" : "";
+  const binds: (string | number)[] = campus
+    ? [term, campus, minSections, limit]
+    : [term, minSections, limit];
   const { results } = await db
     .prepare(
       `SELECT subject,
@@ -102,13 +109,13 @@ export async function getFillRateLeaderboard(
               SUM(sections)                        AS sections,
               CAST(SUM(total_enr) AS REAL) / SUM(total_cap) AS fillRate
          FROM course_term_stats
-        WHERE term = ?
+        WHERE term = ? ${campusFilter}
         GROUP BY subject, course_number
        HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
         ORDER BY fillRate DESC, waitlist DESC
         LIMIT ?`
     )
-    .bind(term, minSections, limit)
+    .bind(...binds)
     .all<LeaderboardRow>();
   return results;
 }
@@ -132,6 +139,24 @@ export async function getCourseOptions(db: D1Like): Promise<CourseOption[]> {
     )
     .all<CourseOption>();
   return results;
+}
+
+/**
+ * Every campus that has rollup data, ordered by total enrollment (biggest
+ * first). Powers the campus pickers — the universe so a picker can show all
+ * campuses (greying out the ones a given course/term lacks data for).
+ */
+export async function getCampuses(db: D1Like): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT facet_value AS campus
+         FROM term_facet_stats
+        WHERE facet = 'campus' AND facet_value != ''
+        GROUP BY facet_value
+        ORDER BY SUM(total_enr) DESC`
+    )
+    .all<{ campus: string }>();
+  return results.map((r) => r.campus);
 }
 
 /** Ordered list of terms that have rollups (for the leaderboard term picker). */

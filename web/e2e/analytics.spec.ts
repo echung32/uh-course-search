@@ -33,6 +33,20 @@ test("api: fill-rate ranks the seeded term's courses by fill rate", async ({ req
   expect(body.rows[0].fillRate).toBeGreaterThan(body.rows[1].fillRate);
 });
 
+test("api: fill-rate campus filter scopes the ranking to one campus", async ({ request }) => {
+  const res = await request.get(
+    "/api/analytics/fill-rate?term=202710&campus=" +
+      encodeURIComponent("Kapiolani Community College")
+  );
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const labels = body.rows.map((r: { subjectCourse: string }) => r.subjectCourse);
+  // Kapiolani has only MATH 140; the Manoa ICS courses must be excluded.
+  expect(labels).toContain("MATH 140");
+  expect(labels).not.toContain("ICS 2110");
+  expect(labels).not.toContain("ICS 1110");
+});
+
 test("api: delivery-mode returns schedule-type facet points", async ({ request }) => {
   const res = await request.get("/api/analytics/delivery-mode");
   expect(res.ok()).toBeTruthy();
@@ -53,12 +67,27 @@ test("page: analytics dashboard renders the four chart sections", async ({ page 
   await expect(page.getByText("University enrollment trend")).toBeVisible();
   await expect(page.getByText("Delivery-mode shift")).toBeVisible();
   await expect(page.getByText("Hardest to get into")).toBeVisible();
+  // Term-range control with its quick presets.
+  await expect(page.getByText("Term range")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Last 5 yrs" })).toBeVisible();
   // Recharts renders <svg class="recharts-surface"> once data loads.
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
   // The campus selector defaults to the biggest campus (Manoa).
   await expect(
     page.getByRole("combobox").filter({ hasText: "Manoa" }).first()
   ).toBeVisible({ timeout: 10000 });
+});
+
+test("term range narrows the trend charts", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // "Fall 2025" appears on the trend-chart x-axes (ICS 1110 has 202610 data).
+  const fall2025 = page.getByText("Fall 2025", { exact: true });
+  await expect(fall2025.first()).toBeVisible();
+  // Set the "From" term to Fall 2026 → the older term drops off every trend chart.
+  await page.getByRole("combobox").filter({ hasText: "Earliest" }).click();
+  await page.getByRole("option").filter({ hasText: "Fall 2026" }).click();
+  await expect(fall2025).toHaveCount(0);
 });
 
 test("nav: header links between Search and Analytics", async ({ page }) => {

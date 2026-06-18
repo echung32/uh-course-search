@@ -8,9 +8,10 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from "recharts";
+import { ChartLegend } from "./ChartLegend";
+import { ChartTooltip } from "./ChartTooltip";
 
 export interface FacetTrendPoint {
   term: string;
@@ -54,26 +55,28 @@ export function UniversityTrend({
     return <p className="text-sm text-muted-foreground">No data.</p>;
   }
   return (
-    <ResponsiveContainer width="100%" height={320}>
-      <AreaChart data={rows} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-        <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
-        <YAxis fontSize={12} allowDecimals={false} />
-        <Tooltip labelFormatter={(label) => termLabel(String(label))} />
-        <Legend />
-        {keys.map((k, i) => (
-          <Area
-            key={k}
-            type="monotone"
-            dataKey={k}
-            name={k}
-            stackId="1"
-            stroke={PALETTE[i % PALETTE.length]}
-            fill={PALETTE[i % PALETTE.length]}
-            fillOpacity={0.6}
-          />
-        ))}
-      </AreaChart>
-    </ResponsiveContainer>
+    <div>
+      <ResponsiveContainer width="100%" height={320}>
+        <AreaChart data={rows} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+          <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
+          <YAxis fontSize={12} allowDecimals={false} />
+          <Tooltip content={<ChartTooltip labelFormatter={termLabel} />} />
+          {keys.map((k, i) => (
+            <Area
+              key={k}
+              type="monotone"
+              dataKey={k}
+              name={k}
+              stackId="1"
+              stroke={PALETTE[i % PALETTE.length]}
+              fill={PALETTE[i % PALETTE.length]}
+              fillOpacity={0.6}
+            />
+          ))}
+        </AreaChart>
+      </ResponsiveContainer>
+      <ChartLegend keys={keys} palette={PALETTE} />
+    </div>
   );
 }
