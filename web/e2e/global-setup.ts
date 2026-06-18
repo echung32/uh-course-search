@@ -6,33 +6,7 @@
 // released before `yarn preview` opens it via node:sqlite.
 import { DatabaseSync } from "node:sqlite";
 import { execSync } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
-
-// Throwaway persist dir for e2e — kept separate from the default `.wrangler/state`
-// so seeding the fixture never wipes the real data a developer keeps locally.
-// Must match `--persist-to` in playwright.config.ts (the app server reads the
-// same D1 file this setup seeds).
-const E2E_PERSIST = ".wrangler-e2e";
-
-function findLocalD1File(): string {
-  const dir = join(
-    process.cwd(),
-    E2E_PERSIST,
-    "v3",
-    "d1",
-    "miniflare-D1DatabaseObject"
-  );
-  const file = readdirSync(dir).find(
-    (f) => f.endsWith(".sqlite") && f !== "metadata.sqlite"
-  );
-  if (!file) {
-    throw new Error(
-      `No local D1 file in ${dir}. Run: yarn wrangler d1 migrations apply uh-course-search-db --local --persist-to ${E2E_PERSIST}`
-    );
-  }
-  return join(dir, file);
-}
+import { E2E_PERSIST, findLocalD1File } from "./d1-helpers";
 
 interface SeedFaculty {
   bannerId: string;
@@ -159,8 +133,15 @@ export default function globalSetup() {
     `yarn wrangler d1 migrations apply uh-course-search-db --local --persist-to ${E2E_PERSIST}`,
     { stdio: "ignore" }
   );
+  // Analytics DB (uh-analytics-db) lives in its own local file; apply its
+  // migration so wrangler dev exposes a schema-complete ANALYTICS_DB binding and
+  // the rollups admin route has somewhere to write.
+  execSync(
+    `yarn wrangler d1 migrations apply uh-analytics-db --local --persist-to ${E2E_PERSIST}`,
+    { stdio: "ignore" }
+  );
 
-  const db = new DatabaseSync(findLocalD1File(), {
+  const db = new DatabaseSync(findLocalD1File("course_section"), {
     enableForeignKeyConstraints: false,
   });
 
@@ -175,7 +156,6 @@ export default function globalSetup() {
     "instructor",
     "subject",
     "sync_run",
-    "enrollment_snapshot",
     "term",
   ]) {
     db.exec(`DELETE FROM ${table};`);
@@ -198,6 +178,9 @@ export default function globalSetup() {
   term.run("202710", "Fall 2026", 2, SYNCED);
   term.run("202730", "Spring 2026", 1, SYNCED);
   term.run("202740", "Summer 2026", 0, null);
+  // Historical term for the analytics enrollment-trend fixture (202610 rollups).
+  // Negative display_order keeps it out of the read-path search tests' dropdown.
+  term.run("202610", "Fall 2025", -10, SYNCED);
 
   const insert = db.prepare(
     `INSERT INTO course_section
@@ -335,6 +318,102 @@ export default function globalSetup() {
   );
   voRun.run("202700", now, now, "ok");
   voRun.run("202695", now, now, "error");
+
+  // --- Analytics-rollups fixture (e2e/ingest.spec.ts "rollups" test) ---------
+  // A dedicated view-only term (202750) with exactly THREE deterministic
+  // sections so computeAllRollups produces known, exact numbers. Negative
+  // display_order keeps it out of the read-path tests' term dropdown. No SIS
+  // interaction (view-only). Expected rollups for term 202750:
+  //   course_term_stats (2 rows):
+  //     ICS 1110 Manoa: sections=2, total_enr=50, total_cap=80, capped=2, open=2
+  //     ICS 2110 Manoa: sections=1, total_enr=5,  total_cap=0,  capped=0, open=0
+  //       (max=0 honest-fill: counted in `sections`, NOT in `capped_sections`)
+  //   term_facet_stats facet='all': sections=3, total_enr=55, total_cap=80, capped=2
+  //   term_facet_stats facet='schedule_type':
+  //     'Lecture' sections=2 total_enr=50 ; 'Online' sections=1 total_enr=5
+  voTerm.run("202750", "Analytics Fixture", -5, SYNCED);
+  // Mark its details pass complete so the backfill auto-selector (newest
+  // view-only term lacking an ok/partial `details` sync_run) skips it — this
+  // fixture exists for rollups, not backfill, and 202750 > 202695 would
+  // otherwise hijack the backfill-selection test.
+  voRun.run("202750", now, now, "ok");
+  const aSection = db.prepare(
+    `INSERT INTO course_section
+       (term, crn, subject, subject_description, course_number, sequence_number,
+        subject_course, course_title, campus_description, schedule_type_desc,
+        maximum_enrollment, enrollment, seats_available, open_section, wait_count, raw_json, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const ANALYTICS_ROWS: Array<
+    [string, string, string, string, string, string, number, number, number, number]
+  > = [
+    // crn, subject, course_number, subject_course, campus, schedule_type, max, enr, seats, open
+    ["75001", "ICS", "1110", "ICS 1110", MANOA, "Lecture", 40, 30, 10, 1],
+    ["75002", "ICS", "1110", "ICS 1110", MANOA, "Lecture", 40, 20, 20, 1],
+    ["75003", "ICS", "2110", "ICS 2110", MANOA, "Online", 0, 5, 0, 0],
+  ];
+  for (const [crn, subject, courseNumber, subjectCourse, campus, schedType, max, enr, seats, open] of ANALYTICS_ROWS) {
+    aSection.run(
+      "202750",
+      crn,
+      subject,
+      "Information & Computer Sciences",
+      courseNumber,
+      "001",
+      subjectCourse,
+      "Analytics Course",
+      campus,
+      schedType,
+      max,
+      enr,
+      seats,
+      open,
+      0, // wait_count
+      "{}",
+      now
+    );
+  }
+
+  // ── analytics rollup fixture (read-path analytics e2e) ──
+  // ICS 1110 across two terms at Manoa, plus facet rows, so the four charts
+  // render real lines/areas/bars. Independent of the search fixture.
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), {
+    enableForeignKeyConstraints: false,
+  });
+  for (const t of ["course_term_stats", "term_facet_stats", "analytics_meta"]) {
+    adb.exec(`DELETE FROM ${t};`);
+  }
+  const cts = adb.prepare(
+    `INSERT INTO course_term_stats
+       (term, subject, course_number, subject_course, course_title, campus,
+        sections, total_enr, total_cap, capped_sections, total_wait, open_sections)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  // ICS 1110: 202610 → 50 enrolled, 202710 → 70 enrolled (Manoa).
+  cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 50, 80, 2, 5, 2);
+  cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 70, 80, 2, 8, 1);
+  // A second campus (Hilo) so the per-campus selector has something to pick.
+  // Manoa stays the bigger campus, so "biggest campus" still defaults to Manoa.
+  cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 20, 30, 1, 0, 1);
+  cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 25, 30, 1, 0, 1);
+  // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
+  cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
+
+  const tfs = adb.prepare(
+    `INSERT INTO term_facet_stats
+       (term, facet, facet_value, sections, total_enr, total_cap, capped_sections, total_wait)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  tfs.run("202610", "campus", "University of Hawaii at Manoa", 2, 50, 80, 2, 5);
+  tfs.run("202710", "campus", "University of Hawaii at Manoa", 3, 109, 120, 3, 20);
+  tfs.run("202610", "schedule_type", "Lecture", 2, 50, 80, 2, 5);
+  tfs.run("202710", "schedule_type", "Lecture", 2, 70, 80, 2, 8);
+  tfs.run("202710", "schedule_type", "Online", 1, 39, 40, 1, 12);
+  adb.prepare(
+    `INSERT INTO analytics_meta (key, value) VALUES ('rollups_version', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run("1700000000000");
+  adb.close();
 
   db.close();
 }

@@ -137,7 +137,15 @@ export function remoteD1(config: HttpConfig): D1Like {
 
 // ── node:sqlite (local wrangler D1 file) backend ────────────────────────────
 
-function findLocalD1File(): string {
+/**
+ * Resolves the wrangler local D1 sqlite file for the database that owns
+ * `sentinelTable`. With multiple local D1 databases, miniflare writes several
+ * files under miniflare-D1DatabaseObject; we pick the one whose schema contains
+ * the sentinel table (deterministic, independent of miniflare's file naming).
+ * `ANALYTICS_D1_LOCAL_FILE` / `SEARCH_D1_LOCAL_FILE` env overrides win if set.
+ */
+function findLocalD1File(sentinelTable: string, override?: string): string {
+  if (override && process.env[override]) return process.env[override] as string;
   const dir = join(
     process.cwd(),
     ".wrangler",
@@ -146,15 +154,35 @@ function findLocalD1File(): string {
     "d1",
     "miniflare-D1DatabaseObject"
   );
-  const file = readdirSync(dir).find(
+  const candidates = readdirSync(dir).filter(
     (f) => f.endsWith(".sqlite") && f !== "metadata.sqlite"
   );
-  if (!file) {
-    throw new Error(
-      `No local D1 sqlite file in ${dir}. Run: wrangler d1 migrations apply uh_sis --local`
-    );
+  for (const f of candidates) {
+    const path = join(dir, f);
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(path, { readOnly: true });
+    } catch {
+      // Not a valid SQLite file (e.g. a stray/corrupt file in the dir); skip it
+      // rather than letting "file is not a database" mask the real DB.
+      continue;
+    }
+    try {
+      const row = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(sentinelTable);
+      if (row) return path;
+    } catch {
+      // A malformed candidate can throw on query too; skip it.
+      continue;
+    } finally {
+      db.close();
+    }
   }
-  return join(dir, file);
+  throw new Error(
+    `No local D1 file containing table '${sentinelTable}' in ${dir}. `
+      + `Run the matching: wrangler d1 migrations apply <db> --local`
+  );
 }
 
 function localStatement(
@@ -188,7 +216,7 @@ export function localSqliteD1(filePath?: string): D1Like {
   // Foreign keys are intentionally OFF to match D1, which does not enforce FK
   // constraints by default. node:sqlite enables them by default, so it must be
   // disabled explicitly. Child rows are pruned explicitly in the upsert path.
-  const db = new DatabaseSync(filePath ?? findLocalD1File(), {
+  const db = new DatabaseSync(filePath ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE"), {
     enableForeignKeyConstraints: false,
   });
   return {
@@ -239,6 +267,41 @@ function createDb(): D1Like {
   if (!accountId || !databaseId || !apiToken) {
     throw new Error(
       "Remote D1 requires CLOUDFLARE_ACCOUNT_ID, D1_DATABASE_ID, and CLOUDFLARE_API_TOKEN"
+    );
+  }
+  return remoteD1({ accountId, databaseId, apiToken });
+}
+
+// ── analytics DB (Node ingest) ───────────────────────────────────────────────
+
+let cachedAnalytics: D1Like | null = null;
+
+/**
+ * Process-wide analytics D1 client for the Node ingestion CLI. Mirrors getDb()
+ * but targets uh-analytics-db: remote uses ANALYTICS_DATABASE_ID (+ the same
+ * account/token), local uses the sqlite file owning `course_term_stats`.
+ */
+export function getAnalyticsDb(): D1Like {
+  if (cachedAnalytics) return cachedAnalytics;
+  cachedAnalytics = createAnalyticsDb();
+  return cachedAnalytics;
+}
+
+function createAnalyticsDb(): D1Like {
+  const mode =
+    process.env.D1_MODE ??
+    (process.env.NODE_ENV === "production" ? "remote" : "local");
+
+  if (mode === "local") {
+    return localSqliteD1(findLocalD1File("course_term_stats", "ANALYTICS_D1_LOCAL_FILE"));
+  }
+
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const databaseId = process.env.ANALYTICS_DATABASE_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !databaseId || !apiToken) {
+    throw new Error(
+      "Remote analytics D1 requires CLOUDFLARE_ACCOUNT_ID, ANALYTICS_DATABASE_ID, and CLOUDFLARE_API_TOKEN"
     );
   }
   return remoteD1({ accountId, databaseId, apiToken });

@@ -18,13 +18,15 @@
  *   yarn ingest sync-details --term 202730 [--delayMs 250] [--no-sections] ...
  *   yarn ingest refresh-run [--term 202710] [--delayMs 200]
  *   yarn ingest backfill [--term 202700] [--delayMs 250] [--dryRun]
+ *   yarn ingest rollups [--term 202710]
  */
-import { getDb } from "@/lib/db/client";
+import { getDb, getAnalyticsDb } from "@/lib/db/client";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { syncTerm } from "@/lib/ingest/sync";
 import { syncDetails } from "@/lib/ingest/details";
 import { refreshMutableTerms } from "@/lib/ingest/refresh";
 import { backfillNextTerm } from "@/lib/ingest/backfill";
+import { computeAllRollups } from "@/lib/ingest/rollups";
 
 type Flags = Record<string, string | boolean>;
 
@@ -123,9 +125,25 @@ async function main() {
       break;
     }
 
+    case "rollups": {
+      const analyticsDb = getAnalyticsDb();
+      const results = await computeAllRollups(db, analyticsDb, {
+        terms: typeof flags.term === "string" ? [flags.term] : undefined,
+        log,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, terms: results.length, results: results.slice(0, 5) },
+          null,
+          2
+        )
+      );
+      break;
+    }
+
     default:
       console.error(
-        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill> [flags]"
+        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|rollups> [flags]"
       );
       process.exit(1);
   }

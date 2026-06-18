@@ -1,4 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { DatabaseSync } from "node:sqlite";
+import { findLocalD1File } from "./d1-helpers";
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
 // drives the mock SIS server (handshake → subjects → paginated searchResults)
@@ -350,4 +352,63 @@ test("backfill admin route requires the secret", async ({ request }) => {
     headers: { "content-type": "application/json" },
   });
   expect(res.status()).toBe(401);
+});
+
+test("admin rollups recomputes analytics stats for a term", async ({ request }) => {
+  // Term 202750 is the deterministic analytics fixture (global-setup.ts): 3
+  // sections — 2× ICS 1110 Manoa Lecture (enr 30+20, cap 40+40) and 1× ICS 2110
+  // Manoa Online with maximum_enrollment=0 (the honest-fill case).
+  const res = await request.post("/api/admin/rollups?term=202750", {
+    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  });
+  expect(res.ok()).toBeTruthy();
+  expect((await res.json()).ok).toBe(true);
+
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), { readOnly: true });
+  try {
+    const courseRows = adb
+      .prepare("SELECT subject, course_number, sections, capped_sections FROM course_term_stats WHERE term = ?")
+      .all("202750") as Array<{
+        subject: string;
+        course_number: string;
+        sections: number;
+        capped_sections: number;
+      }>;
+    expect(courseRows).toHaveLength(2);
+
+    // ICS 2110: max=0 section counted in `sections` but NOT `capped_sections`.
+    const ics211 = courseRows.find((r) => r.course_number === "2110");
+    expect(ics211).toBeDefined();
+    expect(ics211!.sections).toBe(1);
+    expect(ics211!.capped_sections).toBe(0);
+
+    const all = adb
+      .prepare(
+        "SELECT sections, total_enr, total_cap, capped_sections FROM term_facet_stats WHERE term = ? AND facet = 'all'"
+      )
+      .get("202750") as {
+        sections: number;
+        total_enr: number;
+        total_cap: number;
+        capped_sections: number;
+      };
+    expect(all).toMatchObject({ sections: 3, total_enr: 55, total_cap: 80, capped_sections: 2 });
+
+    // facet='schedule_type': Lecture (2 sections, enr 30+20=50) + Online (1, enr 5).
+    const schedRows = adb
+      .prepare(
+        "SELECT facet_value, sections, total_enr FROM term_facet_stats WHERE term = ? AND facet = 'schedule_type'"
+      )
+      .all("202750") as Array<{ facet_value: string; sections: number; total_enr: number }>;
+    const lecture = schedRows.find((r) => r.facet_value === "Lecture");
+    expect(lecture).toBeDefined();
+    expect(lecture!.sections).toBe(2);
+    expect(lecture!.total_enr).toBe(50);
+    const online = schedRows.find((r) => r.facet_value === "Online");
+    expect(online).toBeDefined();
+    expect(online!.sections).toBe(1);
+    expect(online!.total_enr).toBe(5);
+  } finally {
+    adb.close();
+  }
 });

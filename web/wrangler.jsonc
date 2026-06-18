@@ -24,6 +24,12 @@
       "database_name": "uh-course-search-db",
       "database_id": "ef6df010-9587-4a18-82f7-d07251d90056",
       "migrations_dir": "./migrations"
+    },
+    {
+      "binding": "ANALYTICS_DB",
+      "database_name": "uh-analytics-db",
+      "database_id": "cade1759-2481-4f97-966a-6f0afc3750ee",
+      "migrations_dir": "./migrations-analytics"
     }
   ],
   // Subrequest budget raised to cover Tier A full sync across multiple terms
