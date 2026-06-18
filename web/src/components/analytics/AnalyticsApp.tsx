@@ -85,13 +85,17 @@ export function AnalyticsApp({
     () => terms.map((t) => ({ value: t.code, label: t.description })),
     [terms]
   );
-  const [lbTerm, setLbTerm] = React.useState(terms[0]?.code ?? "");
+  const [lbTerm, setLbTerm] = React.useState("");
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
-    if (!lbTerm) return;
-    fetch(`/api/analytics/fill-rate?term=${encodeURIComponent(lbTerm)}&limit=20`)
+    const qs = lbTerm ? `?term=${encodeURIComponent(lbTerm)}&limit=20` : `?limit=20`;
+    fetch(`/api/analytics/fill-rate${qs}`)
       .then((r) => r.json())
-      .then((d) => setRows(d.rows ?? []))
+      .then((d) => {
+        setRows(d.rows ?? []);
+        // On the initial empty-term load, sync the picker to the term the API chose.
+        if (!lbTerm && d.term) setLbTerm(d.term);
+      })
       .catch(() => setRows([]));
   }, [lbTerm]);
 
