@@ -19,3 +19,10 @@ export function getDb(): D1Like {
   // The native D1Database implements prepare/bind/first/all/run/batch.
   return db as D1Like;
 }
+
+/** The analytics rollup database (uh-analytics-db). Read path only. */
+export function getAnalyticsDb(): D1Like {
+  const db = (env as { ANALYTICS_DB?: unknown }).ANALYTICS_DB;
+  if (!db) throw new Error("D1 binding `ANALYTICS_DB` is not available on env");
+  return db as D1Like;
+}
