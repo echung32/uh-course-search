@@ -1,30 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
-
-// Throwaway persist dir for e2e (matches playwright.config.ts / global-setup.ts).
-const E2E_PERSIST = ".wrangler-e2e";
-
-// Resolve the local D1 .sqlite file whose schema contains `sentinelTable` — the
-// persist dir now holds two D1 databases (search + analytics), one file each.
-function findLocalD1File(sentinelTable: string): string {
-  const dir = join(process.cwd(), E2E_PERSIST, "v3", "d1", "miniflare-D1DatabaseObject");
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".sqlite") || f === "metadata.sqlite") continue;
-    const path = join(dir, f);
-    const probe = new DatabaseSync(path, { readOnly: true });
-    try {
-      const row = probe
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-        .get(sentinelTable);
-      if (row) return path;
-    } finally {
-      probe.close();
-    }
-  }
-  throw new Error(`No local D1 file containing '${sentinelTable}' in ${dir}.`);
-}
+import { findLocalD1File } from "./d1-helpers";
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
 // drives the mock SIS server (handshake → subjects → paginated searchResults)
@@ -417,6 +393,21 @@ test("admin rollups recomputes analytics stats for a term", async ({ request }) 
         capped_sections: number;
       };
     expect(all).toMatchObject({ sections: 3, total_enr: 55, total_cap: 80, capped_sections: 2 });
+
+    // facet='schedule_type': Lecture (2 sections, enr 30+20=50) + Online (1, enr 5).
+    const schedRows = adb
+      .prepare(
+        "SELECT facet_value, sections, total_enr FROM term_facet_stats WHERE term = ? AND facet = 'schedule_type'"
+      )
+      .all("202750") as Array<{ facet_value: string; sections: number; total_enr: number }>;
+    const lecture = schedRows.find((r) => r.facet_value === "Lecture");
+    expect(lecture).toBeDefined();
+    expect(lecture!.sections).toBe(2);
+    expect(lecture!.total_enr).toBe(50);
+    const online = schedRows.find((r) => r.facet_value === "Online");
+    expect(online).toBeDefined();
+    expect(online!.sections).toBe(1);
+    expect(online!.total_enr).toBe(5);
   } finally {
     adb.close();
   }

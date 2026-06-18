@@ -6,41 +6,7 @@
 // released before `yarn preview` opens it via node:sqlite.
 import { DatabaseSync } from "node:sqlite";
 import { execSync } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
-
-// Throwaway persist dir for e2e — kept separate from the default `.wrangler/state`
-// so seeding the fixture never wipes the real data a developer keeps locally.
-// Must match `--persist-to` in playwright.config.ts (the app server reads the
-// same D1 file this setup seeds).
-const E2E_PERSIST = ".wrangler-e2e";
-
-// Two local D1 databases now live under the persist dir (search + analytics),
-// each in its own opaque-named .sqlite file. Resolve the right one by which
-// file's schema contains a sentinel table unique to that DB.
-function findLocalD1File(sentinelTable: string): string {
-  const dir = join(
-    process.cwd(),
-    E2E_PERSIST,
-    "v3",
-    "d1",
-    "miniflare-D1DatabaseObject"
-  );
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".sqlite") || f === "metadata.sqlite") continue;
-    const path = join(dir, f);
-    const probe = new DatabaseSync(path, { readOnly: true });
-    try {
-      const row = probe
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-        .get(sentinelTable);
-      if (row) return path;
-    } finally {
-      probe.close();
-    }
-  }
-  throw new Error(`No local D1 file containing '${sentinelTable}' in ${dir}.`);
-}
+import { E2E_PERSIST, findLocalD1File } from "./d1-helpers";
 
 interface SeedFaculty {
   bannerId: string;
@@ -379,9 +345,9 @@ export default function globalSetup() {
     [string, string, string, string, string, string, number, number, number, number]
   > = [
     // crn, subject, course_number, subject_course, campus, schedule_type, max, enr, seats, open
-    ["75001", "ICS", "1110", "ICS 111", MANOA, "Lecture", 40, 30, 10, 1],
-    ["75002", "ICS", "1110", "ICS 111", MANOA, "Lecture", 40, 20, 20, 1],
-    ["75003", "ICS", "2110", "ICS 211", MANOA, "Online", 0, 5, 0, 0],
+    ["75001", "ICS", "1110", "ICS 1110", MANOA, "Lecture", 40, 30, 10, 1],
+    ["75002", "ICS", "1110", "ICS 1110", MANOA, "Lecture", 40, 20, 20, 1],
+    ["75003", "ICS", "2110", "ICS 2110", MANOA, "Online", 0, 5, 0, 0],
   ];
   for (const [crn, subject, courseNumber, subjectCourse, campus, schedType, max, enr, seats, open] of ANALYTICS_ROWS) {
     aSection.run(
