@@ -1,7 +1,8 @@
 // src/workflows/refresh.ts
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { getDb } from "@/lib/db/binding";
+import { getDb, getAnalyticsDb } from "@/lib/db/binding";
 import { refreshTerms } from "@/lib/ingest/terms";
+import { computeTermRollups } from "@/lib/ingest/rollups";
 import {
   DEFAULT_SUBJECTS_PER_SESSION,
   enumerateSyncSubjects,
@@ -140,6 +141,12 @@ export class RefreshWorkflow extends WorkflowEntrypoint {
             })
         );
       }
+
+      // Recompute analytics rollups for this term (cheap: a few grouped queries
+      // + a small delete-and-replace; nowhere near the 10-min step limit).
+      await step.do(`rollups ${code}`, STEP_OPTS, async () =>
+        computeTermRollups(getDb(), getAnalyticsDb(), code, Date.now())
+      );
 
       // Pace before next term.
       await step.sleep(`pace after ${code}`, "5 seconds");
