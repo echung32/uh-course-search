@@ -26,9 +26,11 @@ function Section({ title, description, children }: {
 export function AnalyticsApp({
   terms,
   courses,
+  campuses,
 }: {
   terms: TermItem[];
   courses: CourseOption[];
+  campuses: string[];
 }) {
   const termLabelMap = React.useMemo(() => {
     const m = new Map<string, string>();
@@ -62,18 +64,25 @@ export function AnalyticsApp({
   }, [courseKey]);
 
   // Per-campus selector for the enrollment chart. "" = All campuses (summed).
+  // Shows every campus: those with data for this course on top (by enrollment),
+  // the rest greyed-out/disabled below so you can see what's missing.
   const [campus, setCampus] = React.useState("");
   const { campusOptions, biggestCampus } = React.useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of trend) {
       totals.set(p.campus, (totals.get(p.campus) ?? 0) + p.enrollment);
     }
-    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
-    return {
-      campusOptions: sorted.map(([name]) => ({ value: name, label: name })) as ComboboxOption[],
-      biggestCampus: sorted[0]?.[0] ?? "",
-    };
-  }, [trend]);
+    const dataSorted = [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+    const withData = new Set(dataSorted);
+    const noData = campuses.filter((c) => !withData.has(c));
+    const options: ComboboxOption[] = [
+      ...dataSorted.map((name) => ({ value: name, label: name })),
+      ...noData.map((name) => ({ value: name, label: name, disabled: true })),
+    ];
+    return { campusOptions: options, biggestCampus: dataSorted[0] ?? "" };
+  }, [trend, campuses]);
   // A new course was loaded → default the selector to its biggest campus.
   React.useEffect(() => {
     setCampus(biggestCampus);
@@ -107,11 +116,18 @@ export function AnalyticsApp({
     () => terms.map((t) => ({ value: t.code, label: t.description })),
     [terms]
   );
+  const campusFilterOptions: ComboboxOption[] = React.useMemo(
+    () => campuses.map((c) => ({ value: c, label: c })),
+    [campuses]
+  );
   const [lbTerm, setLbTerm] = React.useState("");
+  const [lbCampus, setLbCampus] = React.useState("");
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
-    const qs = lbTerm ? `?term=${encodeURIComponent(lbTerm)}&limit=20` : `?limit=20`;
-    fetch(`/api/analytics/fill-rate${qs}`)
+    const params = new URLSearchParams({ limit: "20" });
+    if (lbTerm) params.set("term", lbTerm);
+    if (lbCampus) params.set("campus", lbCampus);
+    fetch(`/api/analytics/fill-rate?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setRows(d.rows ?? []);
@@ -119,7 +135,7 @@ export function AnalyticsApp({
         if (!lbTerm && d.term) setLbTerm(d.term);
       })
       .catch(() => setRows([]));
-  }, [lbTerm]);
+  }, [lbTerm, lbCampus]);
 
   return (
     <div className="space-y-6">
@@ -160,15 +176,27 @@ export function AnalyticsApp({
         <DeliveryModeShift points={delivery} termLabel={termLabel} />
       </Section>
 
-      <Section title="Hardest to get into" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term.">
-        <div className="mb-3 max-w-xs">
-          <Combobox
-            options={termOptions}
-            value={lbTerm}
-            onChange={setLbTerm}
-            placeholder="Select a term"
-            searchPlaceholder="Search terms"
-          />
+      <Section title="Hardest to get into" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={termOptions}
+              value={lbTerm}
+              onChange={setLbTerm}
+              placeholder="Select a term"
+              searchPlaceholder="Search terms"
+            />
+          </div>
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={campusFilterOptions}
+              value={lbCampus}
+              onChange={setLbCampus}
+              clearLabel="All campuses"
+              placeholder="All campuses"
+              searchPlaceholder="Search campuses"
+            />
+          </div>
         </div>
         <FillRateLeaderboard rows={rows} />
       </Section>

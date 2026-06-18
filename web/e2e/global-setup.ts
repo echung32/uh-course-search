@@ -398,6 +398,9 @@ export default function globalSetup() {
   cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 25, 30, 1, 0, 1);
   // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
   cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
+  // A Kapiolani-only course (different course, so ICS 1110 stays Kapiolani-less),
+  // so the leaderboard's campus filter returns a campus-distinct ranking.
+  cts.run("202710", "MATH", "1400", "MATH 140", "Precalculus", "Kapiolani Community College", 5, 100, 140, 5, 3, 1);
 
   const tfs = adb.prepare(
     `INSERT INTO term_facet_stats
@@ -406,6 +409,11 @@ export default function globalSetup() {
   );
   tfs.run("202610", "campus", "University of Hawaii at Manoa", 2, 50, 80, 2, 5);
   tfs.run("202710", "campus", "University of Hawaii at Manoa", 3, 109, 120, 3, 20);
+  tfs.run("202610", "campus", "University of Hawaii at Hilo", 1, 20, 30, 1, 0);
+  tfs.run("202710", "campus", "University of Hawaii at Hilo", 1, 25, 30, 1, 0);
+  // A campus in the universe (so it appears in pickers) but with no ICS 1110
+  // rows, so the enrollment picker greys it out as "no data for this course".
+  tfs.run("202710", "campus", "Kapiolani Community College", 5, 100, 140, 5, 3);
   tfs.run("202610", "schedule_type", "Lecture", 2, 50, 80, 2, 5);
   tfs.run("202710", "schedule_type", "Lecture", 2, 70, 80, 2, 8);
   tfs.run("202710", "schedule_type", "Online", 1, 39, 40, 1, 12);

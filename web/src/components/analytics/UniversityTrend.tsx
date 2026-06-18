@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { ChartLegend } from "./ChartLegend";
+import { ChartTooltip } from "./ChartTooltip";
 
 export interface FacetTrendPoint {
   term: string;
@@ -60,7 +61,7 @@ export function UniversityTrend({
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
           <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
           <YAxis fontSize={12} allowDecimals={false} />
-          <Tooltip labelFormatter={(label) => termLabel(String(label))} />
+          <Tooltip content={<ChartTooltip labelFormatter={termLabel} />} />
           {keys.map((k, i) => (
             <Area
               key={k}

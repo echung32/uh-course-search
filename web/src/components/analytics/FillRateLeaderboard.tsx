@@ -10,6 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { ChartTooltip } from "./ChartTooltip";
 
 export interface LeaderboardRow {
   subject: string;
@@ -46,7 +47,7 @@ export function FillRateLeaderboard({ rows }: { rows: LeaderboardRow[] }) {
         <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
         <XAxis type="number" domain={[0, 100]} unit="%" fontSize={12} />
         <YAxis type="category" dataKey="label" width={90} fontSize={12} />
-        <Tooltip formatter={(v) => `${Number(v)}%`} />
+        <Tooltip content={<ChartTooltip valueFormatter={(v) => `${v}%`} />} />
         <Bar dataKey="fillPct" name="Fill rate" fill="#2563eb" radius={[0, 4, 4, 0]} />
       </BarChart>
     </ResponsiveContainer>

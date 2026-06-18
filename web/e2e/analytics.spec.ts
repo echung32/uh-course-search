@@ -33,6 +33,20 @@ test("api: fill-rate ranks the seeded term's courses by fill rate", async ({ req
   expect(body.rows[0].fillRate).toBeGreaterThan(body.rows[1].fillRate);
 });
 
+test("api: fill-rate campus filter scopes the ranking to one campus", async ({ request }) => {
+  const res = await request.get(
+    "/api/analytics/fill-rate?term=202710&campus=" +
+      encodeURIComponent("Kapiolani Community College")
+  );
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const labels = body.rows.map((r: { subjectCourse: string }) => r.subjectCourse);
+  // Kapiolani has only MATH 140; the Manoa ICS courses must be excluded.
+  expect(labels).toContain("MATH 140");
+  expect(labels).not.toContain("ICS 2110");
+  expect(labels).not.toContain("ICS 1110");
+});
+
 test("api: delivery-mode returns schedule-type facet points", async ({ request }) => {
   const res = await request.get("/api/analytics/delivery-mode");
   expect(res.ok()).toBeTruthy();

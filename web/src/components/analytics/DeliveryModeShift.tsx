@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { pivotByTerm, type FacetTrendPoint } from "./UniversityTrend";
 import { ChartLegend } from "./ChartLegend";
+import { ChartTooltip } from "./ChartTooltip";
 
 const PALETTE = ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2"];
 
@@ -54,8 +55,12 @@ export function DeliveryModeShift({
           <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
           <YAxis fontSize={12} unit="%" domain={[0, 100]} />
           <Tooltip
-            labelFormatter={(label) => termLabel(String(label))}
-            formatter={(v) => `${Number(v).toFixed(1)}%`}
+            content={
+              <ChartTooltip
+                labelFormatter={termLabel}
+                valueFormatter={(v) => `${v.toFixed(1)}%`}
+              />
+            }
           />
           {keys.map((k, i) => (
             <Area

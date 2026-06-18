@@ -1,6 +1,7 @@
 /**
- * GET /api/analytics/fill-rate?term=202710&limit=25
+ * GET /api/analytics/fill-rate?term=202710&limit=25&campus=...
  * The "hardest to get into" courses for a term, ranked by fill rate.
+ * `campus` is optional — omitted/empty ranks across all campuses.
  */
 import type { APIRoute } from "astro";
 import { fetchFillRateLeaderboard, fetchRollupTerms } from "@/lib/analytics";
@@ -17,6 +18,7 @@ export const GET: APIRoute = async ({ request }) => {
   const url = new URL(request.url);
   let term = url.searchParams.get("term") ?? "";
   const limit = Number(url.searchParams.get("limit") ?? "25");
+  const campus = url.searchParams.get("campus") ?? "";
 
   const produce = async (): Promise<Response> => {
     try {
@@ -30,7 +32,7 @@ export const GET: APIRoute = async ({ request }) => {
         }
         term = terms[0];
       }
-      const rows = await fetchFillRateLeaderboard(term, limit);
+      const rows = await fetchFillRateLeaderboard(term, limit, campus);
       return new Response(JSON.stringify({ term, rows }), {
         status: 200,
         headers: { "Content-Type": "application/json" },

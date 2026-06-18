@@ -5,6 +5,7 @@
  */
 import { getAnalyticsDb } from "@/lib/db/binding";
 import {
+  getCampuses,
   getCourseOptions,
   getCourseTrend,
   getFacetTrend,
@@ -18,6 +19,10 @@ import {
 
 export function fetchCourseOptions(): Promise<CourseOption[]> {
   return getCourseOptions(getAnalyticsDb());
+}
+
+export function fetchCampuses(): Promise<string[]> {
+  return getCampuses(getAnalyticsDb());
 }
 
 export function fetchRollupTerms(): Promise<string[]> {
@@ -40,9 +45,16 @@ export function fetchFacetTrend(
 /** Leaderboard with clamped limit (1..100) and a fixed min-sections floor. */
 export function fetchFillRateLeaderboard(
   term: string,
-  limit: number
+  limit: number,
+  campus?: string
 ): Promise<LeaderboardRow[]> {
   const clamped = Math.max(1, Math.min(100, Math.floor(limit) || 25));
   const MIN_SECTIONS = 1; // drop nothing by default; >1 would hide small courses
-  return getFillRateLeaderboard(getAnalyticsDb(), term, clamped, MIN_SECTIONS);
+  return getFillRateLeaderboard(
+    getAnalyticsDb(),
+    term,
+    clamped,
+    MIN_SECTIONS,
+    campus || undefined
+  );
 }

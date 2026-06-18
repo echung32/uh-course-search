@@ -11,6 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { ChartTooltip } from "./ChartTooltip";
 
 export interface CourseTrendPoint {
   term: string;
@@ -56,7 +57,7 @@ export function EnrollmentOverTime({
         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
         <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
         <YAxis fontSize={12} allowDecimals={false} />
-        <Tooltip labelFormatter={(label) => termLabel(String(label))} />
+        <Tooltip content={<ChartTooltip labelFormatter={termLabel} />} />
         <Legend />
         <Line type="monotone" dataKey="enrollment" name="Enrolled" stroke="#2563eb" strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="capacity" name="Capacity" stroke="#16a34a" strokeWidth={2} dot={false} />
