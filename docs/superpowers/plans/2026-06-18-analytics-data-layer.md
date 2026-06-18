@@ -850,12 +850,22 @@ git commit -m "feat(analytics): recompute rollups per term in the daily RefreshW
 
 ---
 
-## Task 7: One-time historical backfill + docs
+## Task 7: One-time rollup population + docs
+
+> **Not to be confused with `yarn ingest backfill`** (the Banner-facing
+> *details* backfill that fills `section_detail`/instructor rows in the search
+> DB). This task makes **no Banner calls** and **no search-DB writes**: it reads
+> the already-synced `course_section` + `course` rows on remote and writes the
+> aggregated rollups into `uh-analytics-db`. It is independent of, and safe to
+> run alongside, an in-progress `yarn ingest backfill`. (The rollups never read
+> `section_detail`/`instructor`, so the details backfill's progress doesn't
+> affect them; the `college` facet relies only on the already-complete `course`
+> catalogue.)
 
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Run the one-time rollup backfill against remote**
+- [ ] **Step 1: Run the one-time rollup population against remote**
 
 With `web/.env` holding `D1_MODE=remote`, the Cloudflare creds, and the new
 `ANALYTICS_DATABASE_ID`, run (from `web/`):
