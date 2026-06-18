@@ -12,10 +12,20 @@ codes=$(yarn wrangler d1 execute uh-course-search-db --remote \
   --command "SELECT code FROM term ORDER BY code DESC;" 2>/dev/null \
   | grep -oE '20[0-9]{4}' | awk '!seen[$0]++')
 
+# Resume support: skip terms that already have rollups (recompute is safe but the
+# big terms are slow over REST — don't redo finished work after a restart).
+already=$(yarn wrangler d1 execute uh-analytics-db --remote \
+  --command "SELECT DISTINCT term FROM term_facet_stats;" 2>/dev/null \
+  | grep -oE '20[0-9]{4}' | awk '!seen[$0]++')
+echo "resume: $(echo "$already" | grep -c .) terms already done, will skip"
+
 total=$(echo "$codes" | wc -l | tr -d ' ')
 echo "populate-rollups: $total terms, newest-first"
 done=0; failed=""
 for code in $codes; do
+  if echo "$already" | grep -qx "$code"; then
+    done=$((done + 1)); echo "[$done/$total] skip $code"; continue
+  fi
   ok=0
   for attempt in 1 2 3 4 5; do
     if yarn ingest rollups --term "$code" >/dev/null 2>&1; then
