@@ -61,6 +61,28 @@ export function AnalyticsApp({
       .catch(() => setTrend([]));
   }, [courseKey]);
 
+  // Per-campus selector for the enrollment chart. "" = All campuses (summed).
+  const [campus, setCampus] = React.useState("");
+  const { campusOptions, biggestCampus } = React.useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of trend) {
+      totals.set(p.campus, (totals.get(p.campus) ?? 0) + p.enrollment);
+    }
+    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    return {
+      campusOptions: sorted.map(([name]) => ({ value: name, label: name })) as ComboboxOption[],
+      biggestCampus: sorted[0]?.[0] ?? "",
+    };
+  }, [trend]);
+  // A new course was loaded → default the selector to its biggest campus.
+  React.useEffect(() => {
+    setCampus(biggestCampus);
+  }, [biggestCampus]);
+  const shownPoints = React.useMemo(
+    () => (campus ? trend.filter((p) => p.campus === campus) : trend),
+    [campus, trend]
+  );
+
   // ── Chart #4: university trend ──
   const [facet, setFacet] = React.useState<"campus" | "college">("campus");
   const [uni, setUni] = React.useState<FacetTrendPoint[]>([]);
@@ -101,17 +123,29 @@ export function AnalyticsApp({
 
   return (
     <div className="space-y-6">
-      <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course (summed across campuses).">
-        <div className="mb-3 max-w-xs">
-          <Combobox
-            options={courseOptions}
-            value={courseKey}
-            onChange={setCourseKey}
-            placeholder="Select a course"
-            searchPlaceholder="Search courses"
-          />
+      <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={courseOptions}
+              value={courseKey}
+              onChange={setCourseKey}
+              placeholder="Select a course"
+              searchPlaceholder="Search courses"
+            />
+          </div>
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={campusOptions}
+              value={campus}
+              onChange={setCampus}
+              clearLabel="All campuses"
+              placeholder="All campuses"
+              searchPlaceholder="Search campuses"
+            />
+          </div>
         </div>
-        <EnrollmentOverTime points={trend} termLabel={termLabel} />
+        <EnrollmentOverTime points={shownPoints} termLabel={termLabel} />
       </Section>
 
       <Section title="University enrollment trend" description="Total enrollment per term, stacked by campus or college.">

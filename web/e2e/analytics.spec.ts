@@ -11,8 +11,15 @@ test("api: enrollment-trend returns the seeded course series", async ({ request 
   for (const p of body.points) {
     totalEnrByTerm.set(p.term, (totalEnrByTerm.get(p.term) ?? 0) + p.enrollment);
   }
-  expect(totalEnrByTerm.get("202610")).toBe(50);
-  expect(totalEnrByTerm.get("202710")).toBe(70);
+  // Per-term totals now sum Manoa + Hilo: 202610 → 50+20, 202710 → 70+25.
+  expect(totalEnrByTerm.get("202610")).toBe(70);
+  expect(totalEnrByTerm.get("202710")).toBe(95);
+  // The series carries per-campus points: both campuses present for 202710.
+  const campuses202710 = new Set(
+    body.points.filter((p: { term: string }) => p.term === "202710").map((p: { campus: string }) => p.campus)
+  );
+  expect(campuses202710.has("University of Hawaii at Manoa")).toBe(true);
+  expect(campuses202710.has("University of Hawaii at Hilo")).toBe(true);
 });
 
 test("api: fill-rate ranks the seeded term's courses by fill rate", async ({ request }) => {
@@ -48,6 +55,10 @@ test("page: analytics dashboard renders the four chart sections", async ({ page 
   await expect(page.getByText("Hardest to get into")).toBeVisible();
   // Recharts renders <svg class="recharts-surface"> once data loads.
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // The campus selector defaults to the biggest campus (Manoa).
+  await expect(
+    page.getByRole("combobox").filter({ hasText: "Manoa" }).first()
+  ).toBeVisible({ timeout: 10000 });
 });
 
 test("nav: header links between Search and Analytics", async ({ page }) => {

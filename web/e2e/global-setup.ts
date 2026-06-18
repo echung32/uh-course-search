@@ -392,6 +392,10 @@ export default function globalSetup() {
   // ICS 1110: 202610 → 50 enrolled, 202710 → 70 enrolled (Manoa).
   cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 50, 80, 2, 5, 2);
   cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Manoa", 2, 70, 80, 2, 8, 1);
+  // A second campus (Hilo) so the per-campus selector has something to pick.
+  // Manoa stays the bigger campus, so "biggest campus" still defaults to Manoa.
+  cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 20, 30, 1, 0, 1);
+  cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 25, 30, 1, 0, 1);
   // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
   cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
 
