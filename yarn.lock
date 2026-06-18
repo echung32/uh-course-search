@@ -2789,7 +2789,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^19.1.5":
+"@types/react-is@npm:^19.2.0":
+  version: 19.2.0
+  resolution: "@types/react-is@npm:19.2.0"
+  dependencies:
+    "@types/react": "npm:*"
+  checksum: 10c0/ff49ac8b8d439c3377e11d2f9f491ed4f8c8ee800225a40093c7941715ca8ccbde1b3833c5435354a8e39305fd0a163019d97f033c9402bc4b46f515851d2290
+  languageName: node
+  linkType: hard
+
+"@types/react@npm:*, @types/react@npm:^19.1.5":
   version: 19.2.17
   resolution: "@types/react@npm:19.2.17"
   dependencies:
@@ -5593,6 +5602,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"react-is@npm:^19.2.7":
+  version: 19.2.7
+  resolution: "react-is@npm:19.2.7"
+  checksum: 10c0/419fe54d5bd7fdf5414a5bb7bd9a1e0e36f9fae28ffb4cb73290fbe342bde15d8584a90d1db62547f6aa03018dce517b178a041abb522136cd4b4b51b4e94c83
+  languageName: node
+  linkType: hard
+
 "react-redux@npm:8.x.x || 9.x.x":
   version: 9.3.0
   resolution: "react-redux@npm:9.3.0"
@@ -6446,6 +6462,7 @@ __metadata:
     "@types/node": "npm:^25.9.2"
     "@types/react": "npm:^19.1.5"
     "@types/react-dom": "npm:^19.1.5"
+    "@types/react-is": "npm:^19.2.0"
     astro: "npm:6.4.4"
     class-variance-authority: "npm:^0.7.1"
     clsx: "npm:^2.1.1"
@@ -6455,6 +6472,7 @@ __metadata:
     nuqs: "npm:^2.8.9"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
+    react-is: "npm:^19.2.7"
     recharts: "npm:^3.8.1"
     tailwind-merge: "npm:^3.3.0"
     tailwindcss: "npm:^4.1.8"
