@@ -30,8 +30,13 @@ test("api: delivery-mode returns schedule-type facet points", async ({ request }
   const res = await request.get("/api/analytics/delivery-mode");
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
-  const online = body.points.filter((p: { facetValue: string }) => p.facetValue === "Online");
+  // Scope to the seeded fixture term so this is independent of other terms'
+  // rollups (the ingest spec also recomputes an Online row for term 202750).
+  const online = body.points.filter(
+    (p: { facetValue: string; term: string }) => p.facetValue === "Online" && p.term === "202710"
+  );
   expect(online.length).toBe(1);
+  expect(online[0].sections).toBe(1);
 });
 
 test("page: analytics dashboard renders the four chart sections", async ({ page }) => {
