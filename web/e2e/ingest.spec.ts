@@ -1,4 +1,30 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { DatabaseSync } from "node:sqlite";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+
+// Throwaway persist dir for e2e (matches playwright.config.ts / global-setup.ts).
+const E2E_PERSIST = ".wrangler-e2e";
+
+// Resolve the local D1 .sqlite file whose schema contains `sentinelTable` — the
+// persist dir now holds two D1 databases (search + analytics), one file each.
+function findLocalD1File(sentinelTable: string): string {
+  const dir = join(process.cwd(), E2E_PERSIST, "v3", "d1", "miniflare-D1DatabaseObject");
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".sqlite") || f === "metadata.sqlite") continue;
+    const path = join(dir, f);
+    const probe = new DatabaseSync(path, { readOnly: true });
+    try {
+      const row = probe
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(sentinelTable);
+      if (row) return path;
+    } finally {
+      probe.close();
+    }
+  }
+  throw new Error(`No local D1 file containing '${sentinelTable}' in ${dir}.`);
+}
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
 // drives the mock SIS server (handshake → subjects → paginated searchResults)
@@ -350,4 +376,48 @@ test("backfill admin route requires the secret", async ({ request }) => {
     headers: { "content-type": "application/json" },
   });
   expect(res.status()).toBe(401);
+});
+
+test("admin rollups recomputes analytics stats for a term", async ({ request }) => {
+  // Term 202750 is the deterministic analytics fixture (global-setup.ts): 3
+  // sections — 2× ICS 1110 Manoa Lecture (enr 30+20, cap 40+40) and 1× ICS 2110
+  // Manoa Online with maximum_enrollment=0 (the honest-fill case).
+  const res = await request.post("/api/admin/rollups?term=202750", {
+    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  });
+  expect(res.ok()).toBeTruthy();
+  expect((await res.json()).ok).toBe(true);
+
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), { readOnly: true });
+  try {
+    const courseRows = adb
+      .prepare("SELECT subject, course_number, sections, capped_sections FROM course_term_stats WHERE term = ?")
+      .all("202750") as Array<{
+        subject: string;
+        course_number: string;
+        sections: number;
+        capped_sections: number;
+      }>;
+    expect(courseRows).toHaveLength(2);
+
+    // ICS 2110: max=0 section counted in `sections` but NOT `capped_sections`.
+    const ics211 = courseRows.find((r) => r.course_number === "2110");
+    expect(ics211).toBeDefined();
+    expect(ics211!.sections).toBe(1);
+    expect(ics211!.capped_sections).toBe(0);
+
+    const all = adb
+      .prepare(
+        "SELECT sections, total_enr, total_cap, capped_sections FROM term_facet_stats WHERE term = ? AND facet = 'all'"
+      )
+      .get("202750") as {
+        sections: number;
+        total_enr: number;
+        total_cap: number;
+        capped_sections: number;
+      };
+    expect(all).toMatchObject({ sections: 3, total_enr: 55, total_cap: 80, capped_sections: 2 });
+  } finally {
+    adb.close();
+  }
 });

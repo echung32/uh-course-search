@@ -15,7 +15,10 @@ import { join } from "node:path";
 // same D1 file this setup seeds).
 const E2E_PERSIST = ".wrangler-e2e";
 
-function findLocalD1File(): string {
+// Two local D1 databases now live under the persist dir (search + analytics),
+// each in its own opaque-named .sqlite file. Resolve the right one by which
+// file's schema contains a sentinel table unique to that DB.
+function findLocalD1File(sentinelTable: string): string {
   const dir = join(
     process.cwd(),
     E2E_PERSIST,
@@ -23,15 +26,20 @@ function findLocalD1File(): string {
     "d1",
     "miniflare-D1DatabaseObject"
   );
-  const file = readdirSync(dir).find(
-    (f) => f.endsWith(".sqlite") && f !== "metadata.sqlite"
-  );
-  if (!file) {
-    throw new Error(
-      `No local D1 file in ${dir}. Run: yarn wrangler d1 migrations apply uh-course-search-db --local --persist-to ${E2E_PERSIST}`
-    );
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith(".sqlite") || f === "metadata.sqlite") continue;
+    const path = join(dir, f);
+    const probe = new DatabaseSync(path, { readOnly: true });
+    try {
+      const row = probe
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(sentinelTable);
+      if (row) return path;
+    } finally {
+      probe.close();
+    }
   }
-  return join(dir, file);
+  throw new Error(`No local D1 file containing '${sentinelTable}' in ${dir}.`);
 }
 
 interface SeedFaculty {
@@ -159,8 +167,15 @@ export default function globalSetup() {
     `yarn wrangler d1 migrations apply uh-course-search-db --local --persist-to ${E2E_PERSIST}`,
     { stdio: "ignore" }
   );
+  // Analytics DB (uh-analytics-db) lives in its own local file; apply its
+  // migration so wrangler dev exposes a schema-complete ANALYTICS_DB binding and
+  // the rollups admin route has somewhere to write.
+  execSync(
+    `yarn wrangler d1 migrations apply uh-analytics-db --local --persist-to ${E2E_PERSIST}`,
+    { stdio: "ignore" }
+  );
 
-  const db = new DatabaseSync(findLocalD1File(), {
+  const db = new DatabaseSync(findLocalD1File("course_section"), {
     enableForeignKeyConstraints: false,
   });
 
@@ -334,6 +349,61 @@ export default function globalSetup() {
   );
   voRun.run("202700", now, now, "ok");
   voRun.run("202695", now, now, "error");
+
+  // --- Analytics-rollups fixture (e2e/ingest.spec.ts "rollups" test) ---------
+  // A dedicated view-only term (202750) with exactly THREE deterministic
+  // sections so computeAllRollups produces known, exact numbers. Negative
+  // display_order keeps it out of the read-path tests' term dropdown. No SIS
+  // interaction (view-only). Expected rollups for term 202750:
+  //   course_term_stats (2 rows):
+  //     ICS 1110 Manoa: sections=2, total_enr=50, total_cap=80, capped=2, open=2
+  //     ICS 2110 Manoa: sections=1, total_enr=5,  total_cap=0,  capped=0, open=0
+  //       (max=0 honest-fill: counted in `sections`, NOT in `capped_sections`)
+  //   term_facet_stats facet='all': sections=3, total_enr=55, total_cap=80, capped=2
+  //   term_facet_stats facet='schedule_type':
+  //     'Lecture' sections=2 total_enr=50 ; 'Online' sections=1 total_enr=5
+  voTerm.run("202750", "Analytics Fixture", -5, SYNCED);
+  // Mark its details pass complete so the backfill auto-selector (newest
+  // view-only term lacking an ok/partial `details` sync_run) skips it — this
+  // fixture exists for rollups, not backfill, and 202750 > 202695 would
+  // otherwise hijack the backfill-selection test.
+  voRun.run("202750", now, now, "ok");
+  const aSection = db.prepare(
+    `INSERT INTO course_section
+       (term, crn, subject, subject_description, course_number, sequence_number,
+        subject_course, course_title, campus_description, schedule_type_desc,
+        maximum_enrollment, enrollment, seats_available, open_section, wait_count, raw_json, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const ANALYTICS_ROWS: Array<
+    [string, string, string, string, string, string, number, number, number, number]
+  > = [
+    // crn, subject, course_number, subject_course, campus, schedule_type, max, enr, seats, open
+    ["75001", "ICS", "1110", "ICS 111", MANOA, "Lecture", 40, 30, 10, 1],
+    ["75002", "ICS", "1110", "ICS 111", MANOA, "Lecture", 40, 20, 20, 1],
+    ["75003", "ICS", "2110", "ICS 211", MANOA, "Online", 0, 5, 0, 0],
+  ];
+  for (const [crn, subject, courseNumber, subjectCourse, campus, schedType, max, enr, seats, open] of ANALYTICS_ROWS) {
+    aSection.run(
+      "202750",
+      crn,
+      subject,
+      "Information & Computer Sciences",
+      courseNumber,
+      "001",
+      subjectCourse,
+      "Analytics Course",
+      campus,
+      schedType,
+      max,
+      enr,
+      seats,
+      open,
+      0, // wait_count
+      "{}",
+      now
+    );
+  }
 
   db.close();
 }
