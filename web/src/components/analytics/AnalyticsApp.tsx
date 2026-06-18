@@ -226,7 +226,7 @@ export function AnalyticsApp({
             <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} onClick={resetRange}>All time</Button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below (not the leaderboard).</p>
+        <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below.</p>
       </div>
 
       <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">
