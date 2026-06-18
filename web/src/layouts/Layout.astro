@@ -31,11 +31,28 @@ const { title = "UH Course Search" } = Astro.props;
   <body class="min-h-screen bg-background font-sans antialiased">
     <header class="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
       <div class="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-4">
           <span class="text-lg font-semibold tracking-tight">UH Course Search</span>
-          <span class="hidden text-xs text-muted-foreground sm:inline">
-            Unofficial
-          </span>
+          <nav class="flex items-center gap-1 text-sm">
+            <a
+              href="/"
+              class:list={[
+                "rounded-md px-3 py-1.5 transition-colors hover:bg-accent",
+                Astro.url.pathname === "/" ? "font-medium text-foreground" : "text-muted-foreground",
+              ]}
+            >
+              Search
+            </a>
+            <a
+              href="/analytics"
+              class:list={[
+                "rounded-md px-3 py-1.5 transition-colors hover:bg-accent",
+                Astro.url.pathname === "/analytics" ? "font-medium text-foreground" : "text-muted-foreground",
+              ]}
+            >
+              Analytics
+            </a>
+          </nav>
         </div>
         <ThemeToggle client:load />
       </div>
