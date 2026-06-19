@@ -10,24 +10,11 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { pivotByTerm, type FacetTrendPoint } from "./pivot";
+import { pivotByTerm, toPercent, type FacetTrendPoint } from "./pivot";
 import { ChartLegend } from "./ChartLegend";
 import { ChartTooltip } from "./ChartTooltip";
 
 const PALETTE = ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2"];
-
-/** 100%-stacked: converts each term's section counts to percentages. */
-function toPercent(
-  rows: Array<Record<string, number | string>>,
-  keys: string[]
-): Array<Record<string, number | string>> {
-  return rows.map((row) => {
-    const total = keys.reduce((s, k) => s + (Number(row[k]) || 0), 0) || 1;
-    const out: Record<string, number | string> = { term: row.term };
-    for (const k of keys) out[k] = ((Number(row[k]) || 0) / total) * 100;
-    return out;
-  });
-}
 
 export function DeliveryModeShift({
   points,
@@ -53,7 +40,7 @@ export function DeliveryModeShift({
         <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
           <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
-          <YAxis fontSize={12} unit="%" domain={[0, 100]} />
+          <YAxis fontSize={12} unit="%" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} />
           <Tooltip
             content={
               <ChartTooltip

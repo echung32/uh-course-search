@@ -127,6 +127,17 @@ test("course picker defaults to ICS 101", async ({ page }) => {
   await expect(page.getByRole("combobox").filter({ hasText: "ICS 101" })).toBeVisible();
 });
 
+test("charts trim the (View Only) marker from term labels", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // 202610's description is "Fall 2025 (View Only)". The chart x-axis shows the
+  // trimmed "Fall 2025" (exact match only succeeds if stripping happened — the
+  // untrimmed tick would read "Fall 2025 (View Only)").
+  await expect(page.getByText("Fall 2025", { exact: true }).first()).toBeVisible();
+  // The dropdowns keep the full marker (From is pre-filled to this term).
+  await expect(page.getByText("Fall 2025 (View Only)").first()).toBeVisible();
+});
+
 test("term selections persist in the URL (nuqs)", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });

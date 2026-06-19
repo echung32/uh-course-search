@@ -180,7 +180,8 @@ export default function globalSetup() {
   term.run("202740", "Summer 2026", 0, null);
   // Historical term for the analytics enrollment-trend fixture (202610 rollups).
   // Negative display_order keeps it out of the read-path search tests' dropdown.
-  term.run("202610", "Fall 2025", -10, SYNCED);
+  // "(View Only)" in the description exercises the chart label trimming.
+  term.run("202610", "Fall 2025 (View Only)", -10, SYNCED);
 
   const insert = db.prepare(
     `INSERT INTO course_section

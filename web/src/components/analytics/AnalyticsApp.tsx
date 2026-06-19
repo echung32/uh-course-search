@@ -7,7 +7,7 @@ import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime"
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
 import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
-import { classifyTerm, type Semester } from "./termFilter";
+import { classifyTerm, stripViewOnly, type Semester } from "./termFilter";
 import { Info } from "lucide-react";
 import {
   Tooltip,
@@ -60,6 +60,12 @@ function AnalyticsAppInner({
   const termLabel = React.useCallback(
     (code: string) => termLabelMap.get(code) ?? code,
     [termLabelMap]
+  );
+  // Charts drop the "(View Only)" marker for less axis clutter; the dropdowns
+  // keep the full description so view-only terms are still identifiable there.
+  const chartTermLabel = React.useCallback(
+    (code: string) => stripViewOnly(termLabel(code)),
+    [termLabel]
   );
 
   // ── Term range (applies to the three time-series charts) ──
@@ -372,7 +378,7 @@ function AnalyticsAppInner({
             />
           </div>
         </div>
-        <EnrollmentOverTime points={shownPoints} termLabel={termLabel} />
+        <EnrollmentOverTime points={shownPoints} termLabel={chartTermLabel} />
       </Section>
 
       <Section title="University enrollment trend" description="Total enrollment per term, stacked by campus or college.">
@@ -380,11 +386,11 @@ function AnalyticsAppInner({
           <Button type="button" size="sm" variant={facet === "campus" ? "default" : "outline"} onClick={() => setFacet("campus")}>By campus</Button>
           <Button type="button" size="sm" variant={facet === "college" ? "default" : "outline"} onClick={() => setFacet("college")}>By college</Button>
         </div>
-        <UniversityTrend points={uniInRange} termLabel={termLabel} />
+        <UniversityTrend points={uniInRange} termLabel={chartTermLabel} />
       </Section>
 
       <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
-        <DeliveryModeShift points={deliveryInRange} termLabel={termLabel} />
+        <DeliveryModeShift points={deliveryInRange} termLabel={chartTermLabel} />
       </Section>
 
       <Section title="Course fill rate" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">

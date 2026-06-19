@@ -77,3 +77,22 @@ export function pivotByTerm(points: FacetTrendPoint[]): {
   );
   return { rows, keys };
 }
+
+/**
+ * Normalise each term's row to a 100%-stacked share of `keys`. Rounds to 2
+ * decimals so floating-point division never leaves a 0-share series reading as
+ * dust like "0.00000000000003%" — it becomes a clean 0.
+ */
+export function toPercent(
+  rows: Array<Record<string, number | string>>,
+  keys: string[]
+): Array<Record<string, number | string>> {
+  return rows.map((row) => {
+    const total = keys.reduce((s, k) => s + (Number(row[k]) || 0), 0) || 1;
+    const out: Record<string, number | string> = { term: row.term };
+    for (const k of keys) {
+      out[k] = Math.round(((Number(row[k]) || 0) / total) * 100 * 100) / 100;
+    }
+    return out;
+  });
+}

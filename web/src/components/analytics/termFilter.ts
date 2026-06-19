@@ -12,6 +12,11 @@ export interface TermClass {
   special: boolean;
 }
 
+/** Drop the trailing "(View Only)" marker for cleaner chart axis/tooltip labels. */
+export function stripViewOnly(label: string): string {
+  return label.replace(/\s*\(view only\)\s*$/i, "");
+}
+
 export function classifyTerm(description: string): TermClass {
   const semester: Semester = /\bFall\b/i.test(description)
     ? "Fall"

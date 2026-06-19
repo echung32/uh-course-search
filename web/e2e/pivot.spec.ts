@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { pivotByTerm, topNByTotal } from "../src/components/analytics/pivot";
+import { pivotByTerm, topNByTotal, toPercent } from "../src/components/analytics/pivot";
 
 // Pure-function test (no browser/server): the university-trend + delivery-mode
 // stacked area charts pivot facet points by term. Recharts stacked <Area>s break
@@ -43,4 +43,12 @@ test("topNByTotal keeps the biggest N facet values and buckets the rest as Other
   // Already within N → unchanged (no Other bucket).
   const small = topNByTotal([{ term: "1", facetValue: "A", enrollment: 1, sections: 1 }], 5);
   expect(small.some((p) => p.facetValue === "Other")).toBe(false);
+});
+
+test("toPercent normalises to clean rounded shares with no float dust", () => {
+  const out = toPercent([{ term: "1", A: 1, B: 2, C: 0 }], ["A", "B", "C"]);
+  expect(out[0].A).toBe(33.33);
+  expect(out[0].B).toBe(66.67);
+  // A 0-share series reads as exactly 0 — never "0.00000000000003".
+  expect(out[0].C).toBe(0);
 });
