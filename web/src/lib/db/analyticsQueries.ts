@@ -52,10 +52,10 @@ export interface FacetTrendPoint {
   sections: number;
 }
 
-/** Per-term series broken down by a facet's values (charts #4 and #5). */
+/** Per-term series broken down by a facet's values (charts #4, #5, #6). */
 export async function getFacetTrend(
   db: D1Like,
-  facet: "campus" | "college" | "schedule_type"
+  facet: "campus" | "college" | "schedule_type" | "subject"
 ): Promise<FacetTrendPoint[]> {
   const { results } = await db
     .prepare(
@@ -96,7 +96,8 @@ export async function getFillRateLeaderboard(
   term: string,
   limit: number,
   minSections: number,
-  campus?: string
+  campus?: string,
+  sort: "fillRate" | "waitlist" = "fillRate"
 ): Promise<LeaderboardRow[]> {
   // course_term_stats is keyed per (term, course, campus), so a campus filter is
   // a plain WHERE — no schema change needed. Empty campus = summed across all.
@@ -104,6 +105,21 @@ export async function getFillRateLeaderboard(
   const binds: (string | number)[] = campus
     ? [term, campus, minSections, limit]
     : [term, minSections, limit];
+  // Whitelisted ORDER BY + HAVING (never interpolate user input). Both modes
+  // break ties on the other metric. The metric gate differs per mode:
+  //  - fillRate: require capped_sections>0 so the enrollment÷capacity ratio has
+  //    a real denominator (an all-uncapped course has no meaningful fill rate).
+  //  - waitlist: require total_wait>0 instead — capped_sections is irrelevant
+  //    here, and gating on it would drop exactly the high-demand uncapped
+  //    courses (maximum_enrollment=0) the waitlist view exists to surface.
+  // The fillRate column is divide-by-zero-guarded because waitlist mode may now
+  // include rows with SUM(total_cap)=0.
+  const orderBy =
+    sort === "waitlist"
+      ? "ORDER BY waitlist DESC, fillRate DESC"
+      : "ORDER BY fillRate DESC, waitlist DESC";
+  const metricGate =
+    sort === "waitlist" ? "SUM(total_wait) > 0" : "SUM(capped_sections) > 0";
   const { results } = await db
     .prepare(
       `SELECT MAX(subject)                         AS subject,
@@ -113,18 +129,61 @@ export async function getFillRateLeaderboard(
               SUM(total_cap)                       AS capacity,
               SUM(total_wait)                      AS waitlist,
               SUM(sections)                        AS sections,
-              CAST(SUM(total_enr) AS REAL) / SUM(total_cap) AS fillRate
+              CASE WHEN SUM(total_cap) > 0
+                   THEN CAST(SUM(total_enr) AS REAL) / SUM(total_cap)
+                   ELSE 0 END                      AS fillRate
          FROM course_term_stats
         WHERE term = ? ${campusFilter}
           AND subject_course IS NOT NULL AND subject_course != ''
         GROUP BY subject_course
-       HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
-        ORDER BY fillRate DESC, waitlist DESC
+       HAVING ${metricGate} AND SUM(sections) >= ?
+        ${orderBy}
         LIMIT ?`
     )
     .bind(...binds)
     .all<LeaderboardRow>();
   return results;
+}
+
+export interface MeetingHeatCell {
+  dayOfWeek: number; // 0=Mon .. 6=Sun
+  startHour: number; // 0..23
+  meetings: number;
+}
+
+/**
+ * Day-of-week × start-hour meeting counts for one term (chart #7), optionally
+ * scoped to a campus. Summed across campuses when `campus` is omitted. Reads the
+ * pre-aggregated term_meeting_stats rollup (see migrations-analytics/0002).
+ */
+export async function getMeetingHeatmap(
+  db: D1Like,
+  term: string,
+  campus?: string
+): Promise<MeetingHeatCell[]> {
+  const campusFilter = campus ? "AND campus = ?" : "";
+  const binds: string[] = campus ? [term, campus] : [term];
+  const { results } = await db
+    .prepare(
+      `SELECT day_of_week    AS dayOfWeek,
+              start_hour     AS startHour,
+              SUM(meetings)  AS meetings
+         FROM term_meeting_stats
+        WHERE term = ? ${campusFilter}
+        GROUP BY day_of_week, start_hour
+        ORDER BY day_of_week, start_hour`
+    )
+    .bind(...binds)
+    .all<MeetingHeatCell>();
+  return results;
+}
+
+/** Terms that have meeting-heatmap rollups (for the heatmap term picker). */
+export async function getMeetingTerms(db: D1Like): Promise<string[]> {
+  const { results } = await db
+    .prepare(`SELECT DISTINCT term FROM term_meeting_stats ORDER BY term DESC`)
+    .all<{ term: string }>();
+  return results.map((r) => r.term);
 }
 
 export interface CourseOption {

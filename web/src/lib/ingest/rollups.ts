@@ -43,6 +43,13 @@ interface FacetStatRow {
   total_wait: number;
 }
 
+interface MeetingStatRow {
+  campus: string;
+  day_of_week: number; // 0=Mon .. 6=Sun
+  start_hour: number; // 0..23
+  meetings: number;
+}
+
 // Shared aggregate column list (course_section is aliased `cs` where joined).
 const AGG_COLS = `
   COUNT(*)                AS sections,
@@ -106,6 +113,19 @@ async function readFacetStats(searchDb: D1Like, term: string): Promise<FacetStat
     .all<Omit<FacetStatRow, "facet">>();
   for (const r of sched.results) out.push({ facet: "schedule_type", ...r });
 
+  // facet = 'subject' — the subject code is on every section directly (no JOIN),
+  // so subject enrollment partitions cleanly like campus. Powers the subject
+  // growth-ranking chart.
+  const subject = await searchDb
+    .prepare(
+      `SELECT subject AS facet_value, ${AGG_COLS}
+         FROM course_section WHERE term = ?
+        GROUP BY subject`
+    )
+    .bind(term)
+    .all<Omit<FacetStatRow, "facet">>();
+  for (const r of subject.results) out.push({ facet: "subject", ...r });
+
   // facet = 'college' — LEFT JOIN course on its full grain (term, campus, subject, course).
   const college = await searchDb
     .prepare(
@@ -123,6 +143,77 @@ async function readFacetStats(searchDb: D1Like, term: string): Promise<FacetStat
     .all<Omit<FacetStatRow, "facet">>();
   for (const r of college.results) out.push({ facet: "college", ...r });
 
+  return out;
+}
+
+// Day flags in section_meeting, in Mon..Sun order (day_of_week 0..6).
+const DAY_COLUMNS = [
+  "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+] as const;
+
+interface MeetingRow {
+  campus: string | null;
+  begin_time: string | null;
+  monday: number;
+  tuesday: number;
+  wednesday: number;
+  thursday: number;
+  friday: number;
+  saturday: number;
+  sunday: number;
+}
+
+/**
+ * Aggregate the term's section meetings into a day × start-hour grid (per
+ * campus). Banner stores begin_time as a 4-char "HHMM" string; we bucket by the
+ * hour. A meeting fans out to one count per day it recurs (MWF → 3 counts). Rows
+ * with no begin_time (async/online) are skipped — they have no clock slot. Done
+ * in JS rather than SQL because the day fan-out is awkward to express in SQLite.
+ */
+async function readMeetingStats(searchDb: D1Like, term: string): Promise<MeetingStatRow[]> {
+  const { results } = await searchDb
+    .prepare(
+      `SELECT cs.campus_description AS campus,
+              m.begin_time,
+              m.monday, m.tuesday, m.wednesday, m.thursday,
+              m.friday, m.saturday, m.sunday
+         FROM section_meeting m
+         JOIN course_section cs ON cs.term = m.term AND cs.crn = m.crn
+        WHERE m.term = ? AND m.begin_time IS NOT NULL AND m.begin_time != ''`
+    )
+    .bind(term)
+    .all<MeetingRow>();
+
+  // Nested count: campus -> slot(day*24+hour) -> meetings. An integer slot key
+  // sidesteps string delimiters entirely (campus names contain spaces and
+  // punctuation, so any char delimiter is unsafe).
+  const byCampus = new Map<string, Map<number, number>>();
+  for (const r of results) {
+    const hour = Number((r.begin_time ?? "").slice(0, 2));
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+    const campus = r.campus ?? "";
+    let slots = byCampus.get(campus);
+    if (!slots) {
+      slots = new Map<number, number>();
+      byCampus.set(campus, slots);
+    }
+    for (let day = 0; day < DAY_COLUMNS.length; day++) {
+      if (!r[DAY_COLUMNS[day]]) continue;
+      const slot = day * 24 + hour;
+      slots.set(slot, (slots.get(slot) ?? 0) + 1);
+    }
+  }
+  const out: MeetingStatRow[] = [];
+  for (const [campus, slots] of byCampus) {
+    for (const [slot, meetings] of slots) {
+      out.push({
+        campus,
+        day_of_week: Math.floor(slot / 24),
+        start_hour: slot % 24,
+        meetings,
+      });
+    }
+  }
   return out;
 }
 
@@ -173,10 +264,31 @@ async function writeFacetStats(
   }
 }
 
+async function writeMeetingStats(
+  analyticsDb: D1Like,
+  term: string,
+  rows: MeetingStatRow[]
+): Promise<void> {
+  await analyticsDb.prepare("DELETE FROM term_meeting_stats WHERE term = ?").bind(term).run();
+  for (const part of chunk(rows, INSERT_CHUNK)) {
+    const stmts: D1PreparedStatement[] = part.map((r) =>
+      analyticsDb
+        .prepare(
+          `INSERT INTO term_meeting_stats
+             (term, campus, day_of_week, start_hour, meetings)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .bind(term, r.campus, r.day_of_week, r.start_hour, r.meetings)
+    );
+    if (stmts.length > 0) await analyticsDb.batch(stmts);
+  }
+}
+
 export interface RollupSummary {
   term: string;
   courseRows: number;
   facetRows: number;
+  meetingRows: number;
 }
 
 /** Recompute both rollup tables for one term (delete-and-replace). */
@@ -188,8 +300,10 @@ export async function computeTermRollups(
 ): Promise<RollupSummary> {
   const courseRows = await readCourseStats(searchDb, term);
   const facetRows = await readFacetStats(searchDb, term);
+  const meetingRows = await readMeetingStats(searchDb, term);
   await writeCourseStats(analyticsDb, term, courseRows);
   await writeFacetStats(analyticsDb, term, facetRows);
+  await writeMeetingStats(analyticsDb, term, meetingRows);
   await analyticsDb
     .prepare(
       `INSERT INTO analytics_meta (key, value) VALUES ('rollups_version', ?)
@@ -197,7 +311,12 @@ export async function computeTermRollups(
     )
     .bind(String(nowMs))
     .run();
-  return { term, courseRows: courseRows.length, facetRows: facetRows.length };
+  return {
+    term,
+    courseRows: courseRows.length,
+    facetRows: facetRows.length,
+    meetingRows: meetingRows.length,
+  };
 }
 
 /** Recompute rollups for the given terms (default: every term in `term`). */
@@ -218,7 +337,10 @@ export async function computeAllRollups(
   const out: RollupSummary[] = [];
   for (const code of codes) {
     const s = await computeTermRollups(searchDb, analyticsDb, code, now);
-    log(`[rollups] ${code}: ${s.courseRows} course rows, ${s.facetRows} facet rows`);
+    log(
+      `[rollups] ${code}: ${s.courseRows} course rows, ${s.facetRows} facet rows, ` +
+        `${s.meetingRows} meeting rows`
+    );
     out.push(s);
   }
   return out;

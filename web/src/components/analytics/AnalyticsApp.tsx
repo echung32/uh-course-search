@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime";
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
-import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
+import {
+  FillRateLeaderboard,
+  type LeaderboardMetric,
+  type LeaderboardRow,
+} from "./FillRateLeaderboard";
+import { SubjectGrowth } from "./SubjectGrowth";
+import { MeetingHeatmap, type MeetingHeatCell } from "./MeetingHeatmap";
 import { classifyTerm, stripViewOnly, type Semester } from "./termFilter";
 import { Info } from "lucide-react";
 import {
@@ -262,9 +268,10 @@ function AnalyticsAppInner({
   );
   const [lbTerm, setLbTerm] = React.useState("");
   const [lbCampus, setLbCampus] = React.useState("");
+  const [lbSort, setLbSort] = React.useState<LeaderboardMetric>("fillRate");
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
-    const params = new URLSearchParams({ limit: "20" });
+    const params = new URLSearchParams({ limit: "20", sort: lbSort });
     if (lbTerm) params.set("term", lbTerm);
     if (lbCampus) params.set("campus", lbCampus);
     fetch(`/api/analytics/fill-rate?${params}`)
@@ -275,7 +282,41 @@ function AnalyticsAppInner({
         if (!lbTerm && d.term) setLbTerm(d.term);
       })
       .catch(() => setRows([]));
-  }, [lbTerm, lbCampus]);
+  }, [lbTerm, lbCampus, lbSort]);
+
+  // ── Chart #6: subject growth ranking ──
+  // Shares the dashboard term-range + semester filters: growth is measured
+  // between the earliest and latest term that survive `passesTerm`.
+  const [subjectTrend, setSubjectTrend] = React.useState<FacetTrendPoint[]>([]);
+  React.useEffect(() => {
+    fetch(`/api/analytics/subject-trend`)
+      .then((r) => r.json())
+      .then((d) => setSubjectTrend(d.points ?? []))
+      .catch(() => setSubjectTrend([]));
+  }, []);
+  const subjectInRange = React.useMemo(
+    () => subjectTrend.filter((p) => passesTerm(p.term)),
+    [subjectTrend, passesTerm]
+  );
+
+  // ── Chart #7: meeting-time heatmap ──
+  // A single-term snapshot (its own term + campus pickers), independent of the
+  // trend-chart range filter.
+  const [hmTerm, setHmTerm] = React.useState("");
+  const [hmCampus, setHmCampus] = React.useState("");
+  const [heat, setHeat] = React.useState<MeetingHeatCell[]>([]);
+  React.useEffect(() => {
+    const params = new URLSearchParams();
+    if (hmTerm) params.set("term", hmTerm);
+    if (hmCampus) params.set("campus", hmCampus);
+    fetch(`/api/analytics/meeting-heatmap?${params}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setHeat(d.cells ?? []);
+        if (!hmTerm && d.term) setHmTerm(d.term);
+      })
+      .catch(() => setHeat([]));
+  }, [hmTerm, hmCampus]);
 
   return (
     <div className="space-y-6">
@@ -394,8 +435,15 @@ function AnalyticsAppInner({
         <DeliveryModeShift points={deliveryInRange} termLabel={chartTermLabel} />
       </Section>
 
-      <Section title="Course fill rate" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">
-        <div className="mb-3 flex flex-wrap gap-2">
+      <Section
+        title="Course demand"
+        description={
+          lbSort === "waitlist"
+            ? "Courses ranked by total waitlist headcount for the selected term — demand that fill rate alone hides."
+            : "Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one."
+        }
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="max-w-xs flex-1">
             <Combobox
               options={termOptions}
@@ -415,8 +463,41 @@ function AnalyticsAppInner({
               searchPlaceholder="Search campuses"
             />
           </div>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" variant={lbSort === "fillRate" ? "default" : "outline"} aria-pressed={lbSort === "fillRate"} onClick={() => setLbSort("fillRate")}>Fill rate</Button>
+            <Button type="button" size="sm" variant={lbSort === "waitlist" ? "default" : "outline"} aria-pressed={lbSort === "waitlist"} onClick={() => setLbSort("waitlist")}>Waitlist</Button>
+          </div>
         </div>
-        <FillRateLeaderboard rows={rows} />
+        <FillRateLeaderboard rows={rows} metric={lbSort} />
+      </Section>
+
+      <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">
+        <SubjectGrowth points={subjectInRange} termLabel={chartTermLabel} />
+      </Section>
+
+      <Section title="When classes meet" description="Number of class meetings by day of week and start time for the selected term.">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={termOptions}
+              value={hmTerm}
+              onChange={setHmTerm}
+              placeholder="Select a term"
+              searchPlaceholder="Search terms"
+            />
+          </div>
+          <div className="max-w-xs flex-1">
+            <Combobox
+              options={campusFilterOptions}
+              value={hmCampus}
+              onChange={setHmCampus}
+              clearLabel="All campuses"
+              placeholder="All campuses"
+              searchPlaceholder="Search campuses"
+            />
+          </div>
+        </div>
+        <MeetingHeatmap cells={heat} />
       </Section>
     </div>
   );

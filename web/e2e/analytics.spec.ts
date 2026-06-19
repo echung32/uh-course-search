@@ -90,6 +90,71 @@ test("api: fill-rate campus filter scopes the ranking to one campus", async ({ r
   expect(labels).not.toContain("ICS 1110");
 });
 
+test("api: fill-rate sort=waitlist ranks by waitlist headcount", async ({ request }) => {
+  const res = await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=20");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.sort).toBe("waitlist");
+  // ARR 999 is uncapped (capped_sections=0) but has the largest waitlist (30),
+  // so it ranks first — the waitlist view must surface uncapped high-demand
+  // courses that the fill-rate gate would drop.
+  expect(body.rows[0].subjectCourse).toBe("ARR 999");
+  expect(body.rows[0].waitlist).toBeGreaterThanOrEqual(body.rows[1].waitlist);
+});
+
+test("api: fill-rate (default sort) excludes uncapped courses; waitlist includes them", async ({ request }) => {
+  const fill = await (await request.get("/api/analytics/fill-rate?term=202710&limit=50")).json();
+  const wait = await (await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50")).json();
+  const labels = (b: { rows: Array<{ subjectCourse: string | null }> }) =>
+    b.rows.map((r) => r.subjectCourse);
+  // capped_sections=0 → no real fill-rate denominator → excluded from fill-rate.
+  expect(labels(fill)).not.toContain("ARR 999");
+  // …but present under waitlist sort.
+  expect(labels(wait)).toContain("ARR 999");
+});
+
+test("api: subject-trend returns per-term subject facet points", async ({ request }) => {
+  const res = await request.get("/api/analytics/subject-trend");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.facet).toBe("subject");
+  // ICS grows 70 → 109 across the two fixture terms.
+  const ics = body.points.filter((p: { facetValue: string }) => p.facetValue === "ICS");
+  const byTerm = new Map<string, number>(
+    ics.map((p: { term: string; enrollment: number }) => [p.term, p.enrollment])
+  );
+  expect(byTerm.get("202610")).toBe(70);
+  expect(byTerm.get("202710")).toBe(109);
+});
+
+test("api: meeting-heatmap returns day/hour cells and a default term", async ({ request }) => {
+  const res = await request.get("/api/analytics/meeting-heatmap");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  // Defaults to the newest term with meeting rollups (the 202710 fixture).
+  expect(body.term).toBe("202710");
+  // MWF 9am → three cells (Mon/Wed/Fri, day_of_week 0/2/4) each summing 3.
+  const mon9 = body.cells.find(
+    (c: { dayOfWeek: number; startHour: number }) => c.dayOfWeek === 0 && c.startHour === 9
+  );
+  expect(mon9.meetings).toBe(3);
+});
+
+test("api: meeting-heatmap campus filter scopes the grid", async ({ request }) => {
+  const res = await request.get(
+    "/api/analytics/meeting-heatmap?term=202710&campus=" +
+      encodeURIComponent("University of Hawaii at Hilo")
+  );
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  // Hilo's only seeded meeting is Mon 8am; Manoa's MWF 9am must be excluded.
+  const labels = body.cells.map(
+    (c: { dayOfWeek: number; startHour: number }) => `${c.dayOfWeek}:${c.startHour}`
+  );
+  expect(labels).toContain("0:8");
+  expect(labels).not.toContain("0:9");
+});
+
 test("api: delivery-mode returns schedule-type facet points", async ({ request }) => {
   const res = await request.get("/api/analytics/delivery-mode");
   expect(res.ok()).toBeTruthy();
@@ -103,13 +168,15 @@ test("api: delivery-mode returns schedule-type facet points", async ({ request }
   expect(online[0].sections).toBe(1);
 });
 
-test("page: analytics dashboard renders the four chart sections", async ({ page }) => {
+test("page: analytics dashboard renders the chart sections", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.getByRole("heading", { name: "Analytics" })).toBeVisible();
   await expect(page.getByText("Course enrollment over time")).toBeVisible();
   await expect(page.getByText("University enrollment trend")).toBeVisible();
   await expect(page.getByText("Delivery-mode shift")).toBeVisible();
-  await expect(page.getByText("Course fill rate")).toBeVisible();
+  await expect(page.getByText("Course demand")).toBeVisible();
+  await expect(page.getByText("Subject growth")).toBeVisible();
+  await expect(page.getByText("When classes meet")).toBeVisible();
   // Term-range control with its quick presets.
   await expect(page.getByText("Term range")).toBeVisible();
   await expect(page.getByRole("button", { name: "Last 5 yrs" })).toBeVisible();
