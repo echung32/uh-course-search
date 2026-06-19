@@ -7,6 +7,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 set -a; . ./.env; set +a
+# This script populates the REMOTE analytics DB. .env usually pins D1_MODE=local
+# (for dev), which would make `yarn ingest` write the LOCAL sqlite file instead —
+# the run reports "ok" per term but remote stays empty. Force remote here so the
+# ingest writes hit the same database the wrangler --remote resume check reads.
+export D1_MODE=remote
 
 codes=$(yarn wrangler d1 execute uh-course-search-db --remote \
   --command "SELECT code FROM term ORDER BY code DESC;" 2>/dev/null \
