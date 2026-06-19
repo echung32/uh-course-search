@@ -192,7 +192,7 @@ test("range presets reflect the active selection", async ({ page }) => {
 test("special-sessions info tooltip explains the term kinds", async ({ page }) => {
   await page.goto("/analytics");
   await page.getByRole("button", { name: "What are special sessions?" }).hover();
-  await expect(page.getByRole("tooltip")).toContainText("Extension and Apprenticeship");
+  await expect(page.getByRole("tooltip")).toContainText("Accelerated");
 });
 
 test("semester filter removes a semester's terms from the trend charts", async ({ page }) => {

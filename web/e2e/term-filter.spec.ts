@@ -11,6 +11,8 @@ test("classifyTerm reads semester and special-session kind from the description"
   // Extension and Apprenticeship are both "special" sub-terms.
   expect(classifyTerm("Fall 2025 Extension (View Only)")).toEqual({ semester: "Fall", special: true });
   expect(classifyTerm("Spring 2026 Apprenticeship (View Only)")).toEqual({ semester: "Spring", special: true });
+  // Accelerated is special too; Winter falls outside the Fall/Spring/Summer set.
+  expect(classifyTerm("Winter 2017 Accelerated")).toEqual({ semester: "Other", special: true });
 });
 
 test("stripViewOnly removes the trailing (View Only) marker", () => {

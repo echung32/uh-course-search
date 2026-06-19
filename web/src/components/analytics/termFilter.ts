@@ -25,7 +25,6 @@ export function classifyTerm(description: string): TermClass {
       : /\bSummer\b/i.test(description)
         ? "Summer"
         : "Other";
-  const special =
-    /\bExtension\b/i.test(description) || /\bApprenticeship\b/i.test(description);
+  const special = /\b(Extension|Apprenticeship|Accelerated)\b/i.test(description);
   return { semester, special };
 }

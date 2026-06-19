@@ -349,7 +349,8 @@ function AnalyticsAppInner({
                 </button>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs">
-                Off-cycle sub-terms — Extension and Apprenticeship sessions.
+                Off-cycle sub-terms — Extension, Apprenticeship, and Accelerated
+                sessions.
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
