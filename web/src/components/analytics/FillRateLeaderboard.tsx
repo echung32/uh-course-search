@@ -14,7 +14,6 @@ import { ChartTooltip } from "./ChartTooltip";
 
 export interface LeaderboardRow {
   subject: string;
-  courseNumber: string;
   subjectCourse: string | null;
   courseTitle: string | null;
   enrollment: number;
@@ -28,7 +27,7 @@ export function FillRateLeaderboard({ rows }: { rows: LeaderboardRow[] }) {
   const data = React.useMemo(
     () =>
       rows.map((r) => ({
-        label: r.subjectCourse ?? `${r.subject} ${r.courseNumber}`,
+        label: r.subjectCourse ?? r.subject,
         fillPct: Math.round(r.fillRate * 1000) / 10,
         waitlist: r.waitlist,
       })),

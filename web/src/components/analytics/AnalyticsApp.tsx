@@ -7,9 +7,17 @@ import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime"
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
 import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
+import { classifyTerm, type Semester } from "./termFilter";
+import { Info } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface TermItem { code: string; description: string }
-interface CourseOption { subject: string; courseNumber: string; subjectCourse: string | null }
+interface CourseOption { subject: string; subjectCourse: string }
 
 function Section({ title, description, children }: {
   title: string; description: string; children: React.ReactNode;
@@ -53,8 +61,14 @@ export function AnalyticsApp({
   );
   const oldest = sortedTerms[0] ?? "";
   const newest = sortedTerms[sortedTerms.length - 1] ?? "";
-  // "" means "open end" — default is the full range (current behaviour).
-  const [fromTerm, setFromTerm] = React.useState("");
+  // First term whose year is within `years` of the newest (the "Last N yrs" presets).
+  function firstTermWithinYears(years: number): string {
+    if (!newest) return "";
+    const cutoff = Number(newest.slice(0, 4)) - years;
+    return sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff) ?? oldest;
+  }
+  // "" = open end. Default the range to the last 5 years; "" toTerm means "latest".
+  const [fromTerm, setFromTerm] = React.useState(() => firstTermWithinYears(5));
   const [toTerm, setToTerm] = React.useState("");
   const lo = fromTerm || oldest;
   const hi = toTerm || newest;
@@ -66,16 +80,42 @@ export function AnalyticsApp({
       (!rangeLo || code >= rangeLo) && (!rangeHi || code <= rangeHi),
     [rangeLo, rangeHi]
   );
+  // Semester + special-session filters (apply to the trend charts alongside the
+  // range). Default: all semesters on, special sub-terms (Extension /
+  // Apprenticeship) hidden.
+  type BaseSemester = Exclude<Semester, "Other">;
+  const [semesters, setSemesters] = React.useState<Record<BaseSemester, boolean>>({
+    Fall: true,
+    Spring: true,
+    Summer: true,
+  });
+  const [showSpecial, setShowSpecial] = React.useState(false);
+  const toggleSemester = (s: BaseSemester) =>
+    setSemesters((prev) => ({ ...prev, [s]: !prev[s] }));
+  // A term shows on the trend charts iff it's in range, its semester is enabled,
+  // and (unless special sessions are shown) it's a base term.
+  const passesTerm = React.useCallback(
+    (code: string) => {
+      if (!inRange(code)) return false;
+      const { semester, special } = classifyTerm(termLabel(code));
+      if (special && !showSpecial) return false;
+      if (semester !== "Other" && !semesters[semester]) return false;
+      return true;
+    },
+    [inRange, termLabel, semesters, showSpecial]
+  );
   const termRangeOptions: ComboboxOption[] = React.useMemo(
     () => sortedTerms.map((c) => ({ value: c, label: termLabel(c) })),
     [sortedTerms, termLabel]
   );
-  // "Last N years" preset: first term whose year prefix is within N of newest.
+  // The "To" picker reads newest-first — the latest term is the usual choice.
+  const termRangeOptionsDesc = React.useMemo(
+    () => [...termRangeOptions].reverse(),
+    [termRangeOptions]
+  );
+  // "Last N years" preset.
   function setLastYears(years: number) {
-    if (!newest) return;
-    const cutoff = Number(newest.slice(0, 4)) - years;
-    const first = sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff);
-    setFromTerm(first ?? oldest);
+    setFromTerm(firstTermWithinYears(years));
     setToTerm("");
   }
   function resetRange() {
@@ -83,13 +123,18 @@ export function AnalyticsApp({
     setToTerm("");
   }
   const isFullRange = fromTerm === "" && toTerm === "";
+  const isLastYears = (years: number) =>
+    toTerm === "" && fromTerm !== "" && fromTerm === firstTermWithinYears(years);
 
   // ── Chart #1: enrollment over time ──
+  // Keyed on the common-course id: a course offered at several campuses is one
+  // option, and selecting it loads every campus's series (the campus selector
+  // below then filters or sums them).
   const courseOptions: ComboboxOption[] = React.useMemo(
     () =>
       courses.map((c) => ({
-        value: `${c.subject}|${c.courseNumber}`,
-        label: c.subjectCourse ?? `${c.subject} ${c.courseNumber}`,
+        value: c.subjectCourse,
+        label: c.subjectCourse,
         keywords: c.subject,
       })),
     [courses]
@@ -98,8 +143,7 @@ export function AnalyticsApp({
   const [trend, setTrend] = React.useState<CourseTrendPoint[]>([]);
   React.useEffect(() => {
     if (!courseKey) return;
-    const [subject, courseNumber] = courseKey.split("|");
-    fetch(`/api/analytics/enrollment-trend?subject=${encodeURIComponent(subject)}&courseNumber=${encodeURIComponent(courseNumber)}`)
+    fetch(`/api/analytics/enrollment-trend?subjectCourse=${encodeURIComponent(courseKey)}`)
       .then((r) => r.json())
       .then((d) => setTrend(d.points ?? []))
       .catch(() => setTrend([]));
@@ -132,9 +176,9 @@ export function AnalyticsApp({
   const shownPoints = React.useMemo(
     () =>
       trend.filter(
-        (p) => inRange(p.term) && (!campus || p.campus === campus)
+        (p) => passesTerm(p.term) && (!campus || p.campus === campus)
       ),
-    [campus, trend, inRange]
+    [campus, trend, passesTerm]
   );
 
   // ── Chart #4: university trend ──
@@ -147,8 +191,8 @@ export function AnalyticsApp({
       .catch(() => setUni([]));
   }, [facet]);
   const uniInRange = React.useMemo(
-    () => uni.filter((p) => inRange(p.term)),
-    [uni, inRange]
+    () => uni.filter((p) => passesTerm(p.term)),
+    [uni, passesTerm]
   );
 
   // ── Chart #5: delivery mode ──
@@ -160,8 +204,8 @@ export function AnalyticsApp({
       .catch(() => setDelivery([]));
   }, []);
   const deliveryInRange = React.useMemo(
-    () => delivery.filter((p) => inRange(p.term)),
-    [delivery, inRange]
+    () => delivery.filter((p) => passesTerm(p.term)),
+    [delivery, passesTerm]
   );
 
   // ── Chart #2: fill-rate leaderboard ──
@@ -210,7 +254,7 @@ export function AnalyticsApp({
               <span className="text-sm text-muted-foreground">to</span>
               <div className="w-40">
                 <Combobox
-                  options={termRangeOptions}
+                  options={termRangeOptionsDesc}
                   value={toTerm}
                   onChange={setToTerm}
                   clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
@@ -221,12 +265,52 @@ export function AnalyticsApp({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(3)}>Last 3 yrs</Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(5)}>Last 5 yrs</Button>
-            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} onClick={resetRange}>All time</Button>
+            <Button type="button" size="sm" variant={isLastYears(3) ? "default" : "outline"} aria-pressed={isLastYears(3)} onClick={() => setLastYears(3)}>Last 3 yrs</Button>
+            <Button type="button" size="sm" variant={isLastYears(5) ? "default" : "outline"} aria-pressed={isLastYears(5)} onClick={() => setLastYears(5)}>Last 5 yrs</Button>
+            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} aria-pressed={isFullRange} onClick={resetRange}>All time</Button>
           </div>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium">Semesters</span>
+          {(["Fall", "Spring", "Summer"] as const).map((s) => (
+            <Button
+              key={s}
+              type="button"
+              size="sm"
+              variant={semesters[s] ? "default" : "outline"}
+              aria-pressed={semesters[s]}
+              onClick={() => toggleSemester(s)}
+            >
+              {s}
+            </Button>
+          ))}
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Button
+            type="button"
+            size="sm"
+            variant={showSpecial ? "default" : "outline"}
+            aria-pressed={showSpecial}
+            onClick={() => setShowSpecial((v) => !v)}
+          >
+            Special sessions
+          </Button>
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="What are special sessions?"
+                  className="text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Info className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Off-cycle sub-terms — Extension and Apprenticeship sessions.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
 
       <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">

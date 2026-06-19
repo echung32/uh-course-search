@@ -16,25 +16,31 @@ export interface CourseTrendPoint {
   sections: number;
 }
 
-/** Per-term, per-campus series for one course (chart #1). */
+/**
+ * Per-term, per-campus series for one course (chart #1), keyed on the
+ * common-course id (`subject_course`, e.g. "ICS 211"). UH common course
+ * numbering encodes the campus in the trailing digit of `course_number`, so one
+ * logical course spans several campus-specific course numbers; summing by
+ * (term, campus) reunites them into a single course's cross-campus series.
+ */
 export async function getCourseTrend(
   db: D1Like,
-  subject: string,
-  courseNumber: string
+  subjectCourse: string
 ): Promise<CourseTrendPoint[]> {
   const { results } = await db
     .prepare(
       `SELECT term,
               campus,
-              total_enr  AS enrollment,
-              total_cap  AS capacity,
-              total_wait AS waitlist,
-              sections
+              SUM(total_enr)  AS enrollment,
+              SUM(total_cap)  AS capacity,
+              SUM(total_wait) AS waitlist,
+              SUM(sections)   AS sections
          FROM course_term_stats
-        WHERE subject = ? AND course_number = ?
+        WHERE subject_course = ?
+        GROUP BY term, campus
         ORDER BY term, campus`
     )
-    .bind(subject, courseNumber)
+    .bind(subjectCourse)
     .all<CourseTrendPoint>();
   return results;
 }
@@ -68,7 +74,6 @@ export async function getFacetTrend(
 
 export interface LeaderboardRow {
   subject: string;
-  courseNumber: string;
   subjectCourse: string | null;
   courseTitle: string | null;
   enrollment: number;
@@ -79,10 +84,12 @@ export interface LeaderboardRow {
 }
 
 /**
- * The "hardest to get into" courses for one term (chart #2): course-level
- * (summed across campuses), restricted to courses with capped sections (so the
- * fill-rate denominator is real), ranked by enrollment/capacity. `minSections`
- * drops single-section noise.
+ * The "hardest to get into" courses for one term (chart #2), keyed on the
+ * common-course id (`subject_course`) so a course offered at several campuses —
+ * stored under campus-encoded `course_number`s (see getCourseTrend) — ranks once
+ * with its fill rate summed across campuses. Restricted to courses with capped
+ * sections (so the fill-rate denominator is real). `minSections` drops
+ * single-section noise.
  */
 export async function getFillRateLeaderboard(
   db: D1Like,
@@ -99,9 +106,8 @@ export async function getFillRateLeaderboard(
     : [term, minSections, limit];
   const { results } = await db
     .prepare(
-      `SELECT subject,
-              course_number                        AS courseNumber,
-              MAX(subject_course)                  AS subjectCourse,
+      `SELECT MAX(subject)                         AS subject,
+              subject_course                       AS subjectCourse,
               MAX(course_title)                    AS courseTitle,
               SUM(total_enr)                       AS enrollment,
               SUM(total_cap)                       AS capacity,
@@ -110,7 +116,8 @@ export async function getFillRateLeaderboard(
               CAST(SUM(total_enr) AS REAL) / SUM(total_cap) AS fillRate
          FROM course_term_stats
         WHERE term = ? ${campusFilter}
-        GROUP BY subject, course_number
+          AND subject_course IS NOT NULL AND subject_course != ''
+        GROUP BY subject_course
        HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
         ORDER BY fillRate DESC, waitlist DESC
         LIMIT ?`
@@ -122,20 +129,24 @@ export async function getFillRateLeaderboard(
 
 export interface CourseOption {
   subject: string;
-  courseNumber: string;
-  subjectCourse: string | null;
+  subjectCourse: string;
 }
 
-/** Distinct courses that have rollup data — the chart #1 course picker. */
+/**
+ * Distinct courses that have rollup data — the chart #1 course picker. Keyed on
+ * the common-course id (`subject_course`) so a course offered at several
+ * campuses — stored under campus-encoded `course_number`s (see getCourseTrend) —
+ * is listed once, not once per campus.
+ */
 export async function getCourseOptions(db: D1Like): Promise<CourseOption[]> {
   const { results } = await db
     .prepare(
-      `SELECT subject,
-              course_number       AS courseNumber,
-              MAX(subject_course) AS subjectCourse
+      `SELECT MAX(subject)   AS subject,
+              subject_course AS subjectCourse
          FROM course_term_stats
-        GROUP BY subject, course_number
-        ORDER BY subject, course_number`
+        WHERE subject_course IS NOT NULL AND subject_course != ''
+        GROUP BY subject_course
+        ORDER BY subject_course`
     )
     .all<CourseOption>();
   return results;

@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { pivotByTerm, type FacetTrendPoint } from "./UniversityTrend";
+import { pivotByTerm, type FacetTrendPoint } from "./pivot";
 import { ChartLegend } from "./ChartLegend";
 import { ChartTooltip } from "./ChartTooltip";
 

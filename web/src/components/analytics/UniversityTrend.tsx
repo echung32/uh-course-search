@@ -12,36 +12,14 @@ import {
 } from "recharts";
 import { ChartLegend } from "./ChartLegend";
 import { ChartTooltip } from "./ChartTooltip";
+import { pivotByTerm, type FacetTrendPoint } from "./pivot";
 
-export interface FacetTrendPoint {
-  term: string;
-  facetValue: string;
-  enrollment: number;
-  sections: number;
-}
+export type { FacetTrendPoint };
 
 const PALETTE = [
   "#2563eb", "#16a34a", "#dc2626", "#d97706", "#7c3aed",
   "#0891b2", "#db2777", "#65a30d", "#9333ea", "#0d9488",
 ];
-
-/** Pivots [{term, facetValue, enrollment}] into stacked rows keyed by term. */
-export function pivotByTerm(points: FacetTrendPoint[]): {
-  rows: Array<Record<string, number | string>>;
-  keys: string[];
-} {
-  const keys = [...new Set(points.map((p) => p.facetValue))].sort();
-  const byTerm = new Map<string, Record<string, number | string>>();
-  for (const p of points) {
-    const row = byTerm.get(p.term) ?? { term: p.term };
-    row[p.facetValue] = (Number(row[p.facetValue]) || 0) + p.enrollment;
-    byTerm.set(p.term, row);
-  }
-  const rows = [...byTerm.values()].sort((a, b) =>
-    String(a.term).localeCompare(String(b.term))
-  );
-  return { rows, keys };
-}
 
 export function UniversityTrend({
   points,

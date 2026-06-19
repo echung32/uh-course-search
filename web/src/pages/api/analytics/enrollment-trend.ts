@@ -1,6 +1,7 @@
 /**
- * GET /api/analytics/enrollment-trend?subject=ICS&courseNumber=1110
- * Per-term, per-campus enrollment/capacity/waitlist for one course.
+ * GET /api/analytics/enrollment-trend?subjectCourse=ICS%20211
+ * Per-term, per-campus enrollment/capacity/waitlist for one course, keyed on the
+ * common-course id so campus-encoded course-number variants are summed together.
  */
 import type { APIRoute } from "astro";
 import { fetchCourseTrend } from "@/lib/analytics";
@@ -15,14 +16,13 @@ function bad(message: string, status = 400): Response {
 
 export const GET: APIRoute = async ({ request }) => {
   const url = new URL(request.url);
-  const subject = url.searchParams.get("subject");
-  const courseNumber = url.searchParams.get("courseNumber");
-  if (!subject || !courseNumber) return bad("subject and courseNumber are required");
+  const subjectCourse = url.searchParams.get("subjectCourse");
+  if (!subjectCourse) return bad("subjectCourse is required");
 
   const produce = async (): Promise<Response> => {
     try {
-      const points = await fetchCourseTrend(subject, courseNumber);
-      return new Response(JSON.stringify({ subject, courseNumber, points }), {
+      const points = await fetchCourseTrend(subjectCourse);
+      return new Response(JSON.stringify({ subjectCourse, points }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

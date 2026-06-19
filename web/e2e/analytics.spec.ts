@@ -4,7 +4,9 @@ import { test, expect } from "@playwright/test";
 // (e2e/global-setup.ts), no SIS. Runs on all browsers.
 
 test("api: enrollment-trend returns the seeded course series", async ({ request }) => {
-  const res = await request.get("/api/analytics/enrollment-trend?subject=ICS&courseNumber=1110");
+  const res = await request.get(
+    "/api/analytics/enrollment-trend?subjectCourse=" + encodeURIComponent("ICS 1110")
+  );
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   const totalEnrByTerm = new Map<string, number>();
@@ -22,6 +24,36 @@ test("api: enrollment-trend returns the seeded course series", async ({ request 
   expect(campuses202710.has("University of Hawaii at Hilo")).toBe(true);
 });
 
+test("api: course picker lists a multi-campus common course only once", async ({ request }) => {
+  const res = await request.get("/api/analytics/courses");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  // PHYS 170 is one logical course taught at Manoa (course 1700) and Hawaii CC
+  // (course 1703). The picker keys on the common-course id, so it appears once —
+  // not once per campus-encoded course number.
+  const phys170 = body.options.filter(
+    (o: { subjectCourse: string | null }) => o.subjectCourse === "PHYS 170"
+  );
+  expect(phys170.length).toBe(1);
+});
+
+test("api: enrollment-trend sums campus-encoded variants of one common course", async ({ request }) => {
+  const res = await request.get(
+    "/api/analytics/enrollment-trend?subjectCourse=" + encodeURIComponent("PHYS 170")
+  );
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const byTerm = new Map<string, number>();
+  for (const p of body.points) byTerm.set(p.term, (byTerm.get(p.term) ?? 0) + p.enrollment);
+  // 202610 → Manoa 30 + Hawaii CC 10 = 40 ; 202710 → 40 + 12 = 52.
+  expect(byTerm.get("202610")).toBe(40);
+  expect(byTerm.get("202710")).toBe(52);
+  // Both campuses surface as distinct per-campus points under the one course.
+  const campuses = new Set(body.points.map((p: { campus: string }) => p.campus));
+  expect(campuses.has("University of Hawaii at Manoa")).toBe(true);
+  expect(campuses.has("Hawaii Community College")).toBe(true);
+});
+
 test("api: fill-rate ranks the seeded term's courses by fill rate", async ({ request }) => {
   const res = await request.get("/api/analytics/fill-rate?term=202710&limit=20");
   expect(res.ok()).toBeTruthy();
@@ -31,6 +63,17 @@ test("api: fill-rate ranks the seeded term's courses by fill rate", async ({ req
   expect(body.rows.length).toBeGreaterThanOrEqual(2);
   expect(body.rows[0].subjectCourse).toBe("ICS 2110");
   expect(body.rows[0].fillRate).toBeGreaterThan(body.rows[1].fillRate);
+});
+
+test("api: fill-rate collapses a multi-campus common course to one row", async ({ request }) => {
+  const res = await request.get("/api/analytics/fill-rate?term=202710&limit=50");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const phys = body.rows.filter((r: { subjectCourse: string | null }) => r.subjectCourse === "PHYS 170");
+  // PHYS 170 spans Manoa (1700) + Hawaii CC (1703); the leaderboard ranks the
+  // common course once, with the fill rate summed across campuses: 52/100.
+  expect(phys.length).toBe(1);
+  expect(phys[0].fillRate).toBeCloseTo(0.52, 5);
 });
 
 test("api: fill-rate campus filter scopes the ranking to one campus", async ({ request }) => {
@@ -85,9 +128,56 @@ test("term range narrows the trend charts", async ({ page }) => {
   const fall2025 = page.getByText("Fall 2025", { exact: true });
   await expect(fall2025.first()).toBeVisible();
   // Set the "From" term to Fall 2026 → the older term drops off every trend chart.
-  await page.getByRole("combobox").filter({ hasText: "Earliest" }).click();
+  // (From is the first combobox; it's pre-filled by the last-5-years default.)
+  await page.getByRole("combobox").first().click();
   await page.getByRole("option").filter({ hasText: "Fall 2026" }).click();
   await expect(fall2025).toHaveCount(0);
+});
+
+test("term range defaults to the last 5 years (From pre-filled)", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // From is pre-filled to the last-5-years start (fixture: Fall 2025), not the
+  // open-ended "Earliest" placeholder.
+  await expect(page.getByRole("combobox").first()).toContainText("Fall 2025");
+  await expect(page.getByRole("combobox").first()).not.toContainText("Earliest");
+});
+
+test("range presets reflect the active selection", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // Default is last-5-years, so that preset starts active and "All time" doesn't.
+  await expect(page.getByRole("button", { name: "Last 5 yrs" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "All time" })).toHaveAttribute("aria-pressed", "false");
+  // Clicking "All time" moves the active state.
+  await page.getByRole("button", { name: "All time" }).click();
+  await expect(page.getByRole("button", { name: "All time" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Last 5 yrs" })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("special-sessions info tooltip explains the term kinds", async ({ page }) => {
+  await page.goto("/analytics");
+  await page.getByRole("button", { name: "What are special sessions?" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText("Extension and Apprenticeship");
+});
+
+test("semester filter removes a semester's terms from the trend charts", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // The enrollment chart starts populated (default course ICS 1110 — all Fall data).
+  await expect(page.getByText("No data for this course.")).toHaveCount(0);
+  // Turn the Fall semester off → the (all-Fall) enrollment series empties out.
+  await page.getByRole("button", { name: "Fall", exact: true }).click();
+  await expect(page.getByText("No data for this course.")).toBeVisible();
+});
+
+test("the To term dropdown lists the newest term first", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // Open the "To" picker (its trigger shows the "Latest" placeholder).
+  await page.getByRole("combobox").filter({ hasText: "Latest" }).click();
+  // Row 0 is the "Latest (…)" clear entry; the first real term option is newest.
+  await expect(page.getByRole("option").nth(1)).toHaveText("Fall 2026");
 });
 
 test("nav: header links between Search and Analytics", async ({ page }) => {
