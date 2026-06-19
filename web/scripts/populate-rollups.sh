@@ -14,8 +14,13 @@ codes=$(yarn wrangler d1 execute uh-course-search-db --remote \
 
 # Resume support: skip terms that already have rollups (recompute is safe but the
 # big terms are slow over REST — don't redo finished work after a restart).
+# Key the "done" check on the subject facet specifically: it's only written by
+# the current rollup code, so terms rolled up by an OLDER version (which had
+# campus/college/schedule_type facets but no subject facet or meeting stats) are
+# correctly treated as not-done and get recomputed once. Every term with course
+# rows gets a subject facet row, so this never false-skips.
 already=$(yarn wrangler d1 execute uh-analytics-db --remote \
-  --command "SELECT DISTINCT term FROM term_facet_stats;" 2>/dev/null \
+  --command "SELECT DISTINCT term FROM term_facet_stats WHERE facet='subject';" 2>/dev/null \
   | grep -oE '20[0-9]{4}' | awk '!seen[$0]++')
 echo "resume: $(echo "$already" | grep -c .) terms already done, will skip"
 
