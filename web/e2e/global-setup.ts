@@ -381,7 +381,12 @@ export default function globalSetup() {
   const adb = new DatabaseSync(findLocalD1File("course_term_stats"), {
     enableForeignKeyConstraints: false,
   });
-  for (const t of ["course_term_stats", "term_facet_stats", "analytics_meta"]) {
+  for (const t of [
+    "course_term_stats",
+    "term_facet_stats",
+    "term_meeting_stats",
+    "analytics_meta",
+  ]) {
     adb.exec(`DELETE FROM ${t};`);
   }
   const cts = adb.prepare(
@@ -435,6 +440,26 @@ export default function globalSetup() {
   tfs.run("202610", "schedule_type", "Lecture", 2, 50, 80, 2, 5);
   tfs.run("202710", "schedule_type", "Lecture", 2, 70, 80, 2, 8);
   tfs.run("202710", "schedule_type", "Online", 1, 39, 40, 1, 12);
+  // Subject facet (the growth-ranking chart). ICS grows 70→109 (+55.7%) while
+  // MATH shrinks 100→40 (-60%) across the two fixture terms; both clear the
+  // MIN_BASE_ENR=20 baseline so they rank.
+  tfs.run("202610", "subject", "ICS", 4, 70, 110, 4, 5);
+  tfs.run("202710", "subject", "ICS", 6, 109, 120, 6, 20);
+  tfs.run("202610", "subject", "MATH", 5, 100, 140, 5, 3);
+  tfs.run("202710", "subject", "MATH", 2, 40, 60, 2, 0);
+
+  // Meeting heatmap fixture: ICS-style MWF 09:00 + a TuTh 13:00 at Manoa for
+  // term 202710. day_of_week 0=Mon..6=Sun. The heatmap route sums across campus.
+  const tms = adb.prepare(
+    `INSERT INTO term_meeting_stats
+       (term, campus, day_of_week, start_hour, meetings) VALUES (?, ?, ?, ?, ?)`
+  );
+  const MANOA_FULL = "University of Hawaii at Manoa";
+  for (const day of [0, 2, 4]) tms.run("202710", MANOA_FULL, day, 9, 3); // MWF 9am
+  for (const day of [1, 3]) tms.run("202710", MANOA_FULL, day, 13, 2); // TuTh 1pm
+  // A Hilo morning class so the campus filter has something distinct to scope.
+  tms.run("202710", "University of Hawaii at Hilo", 0, 8, 1);
+
   adb.prepare(
     `INSERT INTO analytics_meta (key, value) VALUES ('rollups_version', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`

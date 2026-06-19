@@ -10,11 +10,14 @@ import {
   getCourseTrend,
   getFacetTrend,
   getFillRateLeaderboard,
+  getMeetingHeatmap,
+  getMeetingTerms,
   getRollupTerms,
   type CourseOption,
   type CourseTrendPoint,
   type FacetTrendPoint,
   type LeaderboardRow,
+  type MeetingHeatCell,
 } from "@/lib/db/analyticsQueries";
 
 export function fetchCourseOptions(): Promise<CourseOption[]> {
@@ -36,7 +39,7 @@ export function fetchCourseTrend(
 }
 
 export function fetchFacetTrend(
-  facet: "campus" | "college" | "schedule_type"
+  facet: "campus" | "college" | "schedule_type" | "subject"
 ): Promise<FacetTrendPoint[]> {
   return getFacetTrend(getAnalyticsDb(), facet);
 }
@@ -45,7 +48,8 @@ export function fetchFacetTrend(
 export function fetchFillRateLeaderboard(
   term: string,
   limit: number,
-  campus?: string
+  campus?: string,
+  sort: "fillRate" | "waitlist" = "fillRate"
 ): Promise<LeaderboardRow[]> {
   const clamped = Math.max(1, Math.min(100, Math.floor(limit) || 25));
   const MIN_SECTIONS = 1; // drop nothing by default; >1 would hide small courses
@@ -54,6 +58,18 @@ export function fetchFillRateLeaderboard(
     term,
     clamped,
     MIN_SECTIONS,
-    campus || undefined
+    campus || undefined,
+    sort
   );
+}
+
+export function fetchMeetingHeatmap(
+  term: string,
+  campus?: string
+): Promise<MeetingHeatCell[]> {
+  return getMeetingHeatmap(getAnalyticsDb(), term, campus || undefined);
+}
+
+export function fetchMeetingTerms(): Promise<string[]> {
+  return getMeetingTerms(getAnalyticsDb());
 }

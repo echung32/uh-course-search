@@ -1,11 +1,11 @@
 /**
- * GET /api/analytics/fill-rate?term=202710&limit=25&campus=...&sort=fillRate|waitlist
- * The "hardest to get into" courses for a term, ranked by fill rate (default) or
- * waitlist headcount. `campus` is optional — omitted/empty ranks across all
- * campuses.
+ * GET /api/analytics/meeting-heatmap?term=202710&campus=...
+ * Day-of-week × start-hour class-meeting counts for one term. `campus` is
+ * optional — omitted/empty sums across all campuses. With no `term`, defaults to
+ * the newest term that has meeting rollups.
  */
 import type { APIRoute } from "astro";
-import { fetchFillRateLeaderboard, fetchRollupTerms } from "@/lib/analytics";
+import { fetchMeetingHeatmap, fetchMeetingTerms } from "@/lib/analytics";
 import { analyticsCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 
 function bad(message: string, status = 400): Response {
@@ -18,30 +18,28 @@ function bad(message: string, status = 400): Response {
 export const GET: APIRoute = async ({ request }) => {
   const url = new URL(request.url);
   let term = url.searchParams.get("term") ?? "";
-  const limit = Number(url.searchParams.get("limit") ?? "25");
   const campus = url.searchParams.get("campus") ?? "";
-  const sort = url.searchParams.get("sort") === "waitlist" ? "waitlist" : "fillRate";
 
   const produce = async (): Promise<Response> => {
     try {
       if (!term) {
-        const terms = await fetchRollupTerms();
+        const terms = await fetchMeetingTerms();
         if (terms.length === 0) {
-          return new Response(JSON.stringify({ term: null, rows: [] }), {
+          return new Response(JSON.stringify({ term: null, cells: [] }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
         }
         term = terms[0];
       }
-      const rows = await fetchFillRateLeaderboard(term, limit, campus, sort);
-      return new Response(JSON.stringify({ term, sort, rows }), {
+      const cells = await fetchMeetingHeatmap(term, campus);
+      return new Response(JSON.stringify({ term, cells }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (err) {
-      console.error("analytics/fill-rate failed:", err);
-      return bad("Failed to load leaderboard", 500);
+      console.error("analytics/meeting-heatmap failed:", err);
+      return bad("Failed to load heatmap", 500);
     }
   };
   return withEdgeCache(request, analyticsCacheProfile(), produce);
