@@ -1,8 +1,7 @@
 # uh-course-search
 
 A faster, cleaner reimplementation of the University of Hawaii's course search,
-backed by a server-side cache so the underlying Banner SIS is never on the
-request hot path.
+backed by a server-side cache.
 
 ## Disclaimer
 

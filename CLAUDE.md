@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A reverse-engineering project for the University of Hawaii's Student Information System (Ellucian **Banner SSB9** course search). It has two halves that share the same understanding of the SIS API but no code:
 
-1. **`scripts/`** — Python + Playwright tools that *discovered* the API by driving the real UI in a headless browser and intercepting traffic. These produced the docs and the OpenAPI spec. They talk to the live UH server.
+1. **`discovery/`** — one-off, exploratory Python + Playwright tools that *discovered* the API by driving the real UI in a headless browser and intercepting traffic. These produced the docs and the OpenAPI spec. They talk to the live UH server. (Distinct from `web/scripts/`, which is the Node ingest CLI.)
 2. **`web/`** — An Astro SSR app that *reimplements* the discovered API as direct HTTP "API mimicry" (no browser), exposing a course-search UI and JSON endpoints backed by a server-side session pool and cache.
 
 The canonical reference for how the SIS API works is **`docs/walkthrough.md`** (request lifecycle, token propagation, all 31 endpoints, full search parameter list) and **`openapi.yaml`** (formal spec). Read the walkthrough before touching `web/src/lib/sis/` — the session handshake there is a direct translation of it.
@@ -80,16 +80,16 @@ E2E tests live in `web/e2e/` and run the **full Astro SSR build** (`build` + `pr
 
 Tests use the production build (not `dev`) to keep the Astro dev toolbar out of the DOM.
 
-### Python scripts (uv, run from repo root)
+### Python discovery tools (uv, run from repo root)
 ```bash
-uv run python scripts/<name>.py
+uv run python discovery/<name>.py
 uv run playwright install        # first-time browser setup
 ```
 Python 3.13+, the only dependency is `playwright` (`pyproject.toml`). `main.py` is an unused `uv init` stub.
 
-## scripts/ orientation
+## discovery/ orientation
 
-Two kinds, documented fully in `docs/scripts.md`:
+These are one-off exploratory tools — the live scraping/ingestion now runs in Node under `web/`. Two kinds, documented fully in `docs/discovery.md`:
 - **Live (hit the real UH server via Playwright):** `verify_all_endpoints.py` (sequential 200-OK check of all 31 endpoints → `verification_report.json`), `scrape_banner.py` (captures traffic → `intercepted_calls.json`), `confirm_search_params.py`, and the cookie/token diagnostics (`find_tokens.py`, `get_session_cookies.py`).
 - **Offline (analyze the dumped `intercepted_calls.json`, no network):** the `inspect_*.py` family + `validate_openapi.py`.
 
