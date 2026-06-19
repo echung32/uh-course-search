@@ -8,6 +8,13 @@ import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
 import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
 import { classifyTerm, type Semester } from "./termFilter";
+import { Info } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface TermItem { code: string; description: string }
 interface CourseOption { subject: string; subjectCourse: string }
@@ -54,8 +61,14 @@ export function AnalyticsApp({
   );
   const oldest = sortedTerms[0] ?? "";
   const newest = sortedTerms[sortedTerms.length - 1] ?? "";
-  // "" means "open end" — default is the full range (current behaviour).
-  const [fromTerm, setFromTerm] = React.useState("");
+  // First term whose year is within `years` of the newest (the "Last N yrs" presets).
+  function firstTermWithinYears(years: number): string {
+    if (!newest) return "";
+    const cutoff = Number(newest.slice(0, 4)) - years;
+    return sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff) ?? oldest;
+  }
+  // "" = open end. Default the range to the last 5 years; "" toTerm means "latest".
+  const [fromTerm, setFromTerm] = React.useState(() => firstTermWithinYears(5));
   const [toTerm, setToTerm] = React.useState("");
   const lo = fromTerm || oldest;
   const hi = toTerm || newest;
@@ -100,12 +113,9 @@ export function AnalyticsApp({
     () => [...termRangeOptions].reverse(),
     [termRangeOptions]
   );
-  // "Last N years" preset: first term whose year prefix is within N of newest.
+  // "Last N years" preset.
   function setLastYears(years: number) {
-    if (!newest) return;
-    const cutoff = Number(newest.slice(0, 4)) - years;
-    const first = sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff);
-    setFromTerm(first ?? oldest);
+    setFromTerm(firstTermWithinYears(years));
     setToTerm("");
   }
   function resetRange() {
@@ -282,6 +292,23 @@ export function AnalyticsApp({
           >
             Special sessions
           </Button>
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="What are special sessions?"
+                  className="text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Info className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Off-cycle sub-terms — Extension and Apprenticeship sessions — kept
+                separate from the standard Fall/Spring/Summer terms.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below.</p>
       </div>

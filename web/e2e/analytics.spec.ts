@@ -128,9 +128,25 @@ test("term range narrows the trend charts", async ({ page }) => {
   const fall2025 = page.getByText("Fall 2025", { exact: true });
   await expect(fall2025.first()).toBeVisible();
   // Set the "From" term to Fall 2026 → the older term drops off every trend chart.
-  await page.getByRole("combobox").filter({ hasText: "Earliest" }).click();
+  // (From is the first combobox; it's pre-filled by the last-5-years default.)
+  await page.getByRole("combobox").first().click();
   await page.getByRole("option").filter({ hasText: "Fall 2026" }).click();
   await expect(fall2025).toHaveCount(0);
+});
+
+test("term range defaults to the last 5 years (From pre-filled)", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // From is pre-filled to the last-5-years start (fixture: Fall 2025), not the
+  // open-ended "Earliest" placeholder.
+  await expect(page.getByRole("combobox").first()).toContainText("Fall 2025");
+  await expect(page.getByRole("combobox").first()).not.toContainText("Earliest");
+});
+
+test("special-sessions info tooltip explains the term kinds", async ({ page }) => {
+  await page.goto("/analytics");
+  await page.getByRole("button", { name: "What are special sessions?" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText("Extension and Apprenticeship");
 });
 
 test("semester filter removes a semester's terms from the trend charts", async ({ page }) => {
