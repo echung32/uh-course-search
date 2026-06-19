@@ -412,3 +412,35 @@ test("admin rollups recomputes analytics stats for a term", async ({ request }) 
     adb.close();
   }
 });
+
+test("admin rollups is idempotent across re-runs (upsert + delete-stale)", async ({ request }) => {
+  // The gap-free recompute upserts fresh rows (stamped synced_at=run-ms) then
+  // deletes this term's older-stamped rows. Re-running must leave EXACTLY the
+  // same row set — not duplicate (PK + ON CONFLICT) and not wipe (no
+  // delete-then-insert window). Run twice and assert the counts are stable.
+  const post = () =>
+    request.post("/api/admin/rollups?term=202750", {
+      headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+    });
+  expect((await post()).ok()).toBeTruthy();
+  expect((await post()).ok()).toBeTruthy();
+
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), { readOnly: true });
+  try {
+    const count = (sql: string) =>
+      (adb.prepare(sql).get("202750") as { n: number }).n;
+    // 2 course rows (ICS 1110, ICS 2110), not 4 (no duplicate inserts).
+    expect(count("SELECT COUNT(*) AS n FROM course_term_stats WHERE term = ?")).toBe(2);
+    // Facet rows present (>0), proving the term was never left empty by re-run.
+    expect(count("SELECT COUNT(*) AS n FROM term_facet_stats WHERE term = ?")).toBeGreaterThan(0);
+    // Every row carries the latest run's synced_at — no stale rows survived.
+    const distinctStamps = (
+      adb
+        .prepare("SELECT DISTINCT synced_at AS s FROM course_term_stats WHERE term = ?")
+        .all("202750") as Array<{ s: number }>
+    ).length;
+    expect(distinctStamps).toBe(1);
+  } finally {
+    adb.close();
+  }
+});
