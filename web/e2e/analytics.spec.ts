@@ -143,6 +143,18 @@ test("term range defaults to the last 5 years (From pre-filled)", async ({ page 
   await expect(page.getByRole("combobox").first()).not.toContainText("Earliest");
 });
 
+test("range presets reflect the active selection", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  // Default is last-5-years, so that preset starts active and "All time" doesn't.
+  await expect(page.getByRole("button", { name: "Last 5 yrs" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "All time" })).toHaveAttribute("aria-pressed", "false");
+  // Clicking "All time" moves the active state.
+  await page.getByRole("button", { name: "All time" }).click();
+  await expect(page.getByRole("button", { name: "All time" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Last 5 yrs" })).toHaveAttribute("aria-pressed", "false");
+});
+
 test("special-sessions info tooltip explains the term kinds", async ({ page }) => {
   await page.goto("/analytics");
   await page.getByRole("button", { name: "What are special sessions?" }).hover();

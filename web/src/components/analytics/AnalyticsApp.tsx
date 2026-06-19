@@ -123,6 +123,8 @@ export function AnalyticsApp({
     setToTerm("");
   }
   const isFullRange = fromTerm === "" && toTerm === "";
+  const isLastYears = (years: number) =>
+    toTerm === "" && fromTerm !== "" && fromTerm === firstTermWithinYears(years);
 
   // ── Chart #1: enrollment over time ──
   // Keyed on the common-course id: a course offered at several campuses is one
@@ -263,9 +265,9 @@ export function AnalyticsApp({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(3)}>Last 3 yrs</Button>
-            <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(5)}>Last 5 yrs</Button>
-            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} onClick={resetRange}>All time</Button>
+            <Button type="button" size="sm" variant={isLastYears(3) ? "default" : "outline"} aria-pressed={isLastYears(3)} onClick={() => setLastYears(3)}>Last 3 yrs</Button>
+            <Button type="button" size="sm" variant={isLastYears(5) ? "default" : "outline"} aria-pressed={isLastYears(5)} onClick={() => setLastYears(5)}>Last 5 yrs</Button>
+            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} aria-pressed={isFullRange} onClick={resetRange}>All time</Button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -304,13 +306,11 @@ export function AnalyticsApp({
                 </button>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs">
-                Off-cycle sub-terms — Extension and Apprenticeship sessions — kept
-                separate from the standard Fall/Spring/Summer terms.
+                Off-cycle sub-terms — Extension and Apprenticeship sessions.
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below.</p>
       </div>
 
       <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">
