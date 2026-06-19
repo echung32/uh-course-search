@@ -95,10 +95,22 @@ test("api: fill-rate sort=waitlist ranks by waitlist headcount", async ({ reques
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   expect(body.sort).toBe("waitlist");
-  // ICS 2110 has waitlist 12 (the highest seeded for 202710), so it ranks first
-  // under waitlist sort — ahead of MATH 140 (waitlist 3).
-  expect(body.rows[0].subjectCourse).toBe("ICS 2110");
+  // ARR 999 is uncapped (capped_sections=0) but has the largest waitlist (30),
+  // so it ranks first — the waitlist view must surface uncapped high-demand
+  // courses that the fill-rate gate would drop.
+  expect(body.rows[0].subjectCourse).toBe("ARR 999");
   expect(body.rows[0].waitlist).toBeGreaterThanOrEqual(body.rows[1].waitlist);
+});
+
+test("api: fill-rate (default sort) excludes uncapped courses; waitlist includes them", async ({ request }) => {
+  const fill = await (await request.get("/api/analytics/fill-rate?term=202710&limit=50")).json();
+  const wait = await (await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50")).json();
+  const labels = (b: { rows: Array<{ subjectCourse: string | null }> }) =>
+    b.rows.map((r) => r.subjectCourse);
+  // capped_sections=0 → no real fill-rate denominator → excluded from fill-rate.
+  expect(labels(fill)).not.toContain("ARR 999");
+  // …but present under waitlist sort.
+  expect(labels(wait)).toContain("ARR 999");
 });
 
 test("api: subject-trend returns per-term subject facet points", async ({ request }) => {

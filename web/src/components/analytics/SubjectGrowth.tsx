@@ -46,21 +46,28 @@ export function SubjectGrowth({
   termLabel: (code: string) => string;
 }) {
   const rows = React.useMemo<GrowthRow[]>(() => {
-    // subject → sorted [term, enrollment] across the filtered points.
+    // subject → { term → enrollment } across the filtered points.
     const bySubject = new Map<string, Map<string, number>>();
     for (const p of points) {
       const m = bySubject.get(p.facetValue) ?? new Map<string, number>();
       m.set(p.term, (m.get(p.term) ?? 0) + p.enrollment);
       bySubject.set(p.facetValue, m);
     }
+    // Uniform endpoints: every subject is measured between the SAME first and
+    // last term of the range (the global min/max term present), so the rankings
+    // compare equal-length windows. A subject must have data at both endpoints
+    // to be ranked — a subject that only appears mid-range has no comparable
+    // baseline and is skipped rather than measured over a shorter span.
+    const allTerms = [...new Set(points.map((p) => p.term))].sort();
+    if (allTerms.length < 2) return [];
+    const firstTerm = allTerms[0];
+    const lastTerm = allTerms[allTerms.length - 1];
+
     const out: GrowthRow[] = [];
     for (const [subject, byTerm] of bySubject) {
-      const terms = [...byTerm.keys()].sort();
-      if (terms.length < 2) continue; // need two endpoints to define growth
-      const firstTerm = terms[0];
-      const lastTerm = terms[terms.length - 1];
-      const firstEnr = byTerm.get(firstTerm) ?? 0;
-      const lastEnr = byTerm.get(lastTerm) ?? 0;
+      const firstEnr = byTerm.get(firstTerm);
+      const lastEnr = byTerm.get(lastTerm);
+      if (firstEnr === undefined || lastEnr === undefined) continue;
       if (firstEnr < MIN_BASE_ENR) continue;
       out.push({
         subject,

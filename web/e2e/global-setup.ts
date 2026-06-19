@@ -404,6 +404,11 @@ export default function globalSetup() {
   cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 25, 30, 1, 0, 1);
   // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
   cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
+  // ARR 999 — an UNCAPPED course (maximum_enrollment=0 → capped_sections=0) with
+  // the term's largest waitlist (30). The waitlist leaderboard must surface it
+  // (it's exactly the high-demand-but-uncapped case the view exists for), while
+  // the fill-rate leaderboard must exclude it (no real fill-rate denominator).
+  cts.run("202710", "ARR", "9990", "ARR 999", "Arranged Study", "University of Hawaii at Manoa", 1, 5, 0, 0, 30, 0);
   // A Kapiolani-only course (different course, so ICS 1110 stays Kapiolani-less),
   // so the leaderboard's campus filter returns a campus-distinct ranking.
   cts.run("202710", "MATH", "1400", "MATH 140", "Precalculus", "Kapiolani Community College", 5, 100, 140, 5, 3, 1);

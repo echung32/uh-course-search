@@ -105,13 +105,21 @@ export async function getFillRateLeaderboard(
   const binds: (string | number)[] = campus
     ? [term, campus, minSections, limit]
     : [term, minSections, limit];
-  // Whitelisted ORDER BY (never interpolate user input). Both modes break ties
-  // on the other metric. capped_sections>0 keeps the fill-rate denominator real
-  // for both, so the fillRate column is always well-defined.
+  // Whitelisted ORDER BY + HAVING (never interpolate user input). Both modes
+  // break ties on the other metric. The metric gate differs per mode:
+  //  - fillRate: require capped_sections>0 so the enrollment÷capacity ratio has
+  //    a real denominator (an all-uncapped course has no meaningful fill rate).
+  //  - waitlist: require total_wait>0 instead — capped_sections is irrelevant
+  //    here, and gating on it would drop exactly the high-demand uncapped
+  //    courses (maximum_enrollment=0) the waitlist view exists to surface.
+  // The fillRate column is divide-by-zero-guarded because waitlist mode may now
+  // include rows with SUM(total_cap)=0.
   const orderBy =
     sort === "waitlist"
       ? "ORDER BY waitlist DESC, fillRate DESC"
       : "ORDER BY fillRate DESC, waitlist DESC";
+  const metricGate =
+    sort === "waitlist" ? "SUM(total_wait) > 0" : "SUM(capped_sections) > 0";
   const { results } = await db
     .prepare(
       `SELECT MAX(subject)                         AS subject,
@@ -121,12 +129,14 @@ export async function getFillRateLeaderboard(
               SUM(total_cap)                       AS capacity,
               SUM(total_wait)                      AS waitlist,
               SUM(sections)                        AS sections,
-              CAST(SUM(total_enr) AS REAL) / SUM(total_cap) AS fillRate
+              CASE WHEN SUM(total_cap) > 0
+                   THEN CAST(SUM(total_enr) AS REAL) / SUM(total_cap)
+                   ELSE 0 END                      AS fillRate
          FROM course_term_stats
         WHERE term = ? ${campusFilter}
           AND subject_course IS NOT NULL AND subject_course != ''
         GROUP BY subject_course
-       HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
+       HAVING ${metricGate} AND SUM(sections) >= ?
         ${orderBy}
         LIMIT ?`
     )
