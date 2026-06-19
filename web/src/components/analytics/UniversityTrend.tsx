@@ -12,14 +12,18 @@ import {
 } from "recharts";
 import { ChartLegend } from "./ChartLegend";
 import { ChartTooltip } from "./ChartTooltip";
-import { pivotByTerm, type FacetTrendPoint } from "./pivot";
+import { pivotByTerm, topNByTotal, type FacetTrendPoint } from "./pivot";
 
 export type { FacetTrendPoint };
 
 const PALETTE = [
   "#2563eb", "#16a34a", "#dc2626", "#d97706", "#7c3aed",
   "#0891b2", "#db2777", "#65a30d", "#9333ea", "#0d9488",
+  "#ca8a04", "#0ea5e9", "#e11d48", "#4f46e5", "#84cc16",
 ];
+// Cap the stacked series so a high-cardinality facet (52 colleges, 23 campuses)
+// stays legible: keep the biggest N, fold the rest into "Other".
+const MAX_SERIES = PALETTE.length - 1;
 
 export function UniversityTrend({
   points,
@@ -28,7 +32,10 @@ export function UniversityTrend({
   points: FacetTrendPoint[];
   termLabel: (code: string) => string;
 }) {
-  const { rows, keys } = React.useMemo(() => pivotByTerm(points), [points]);
+  const { rows, keys } = React.useMemo(
+    () => pivotByTerm(topNByTotal(points, MAX_SERIES)),
+    [points]
+  );
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">No data.</p>;
   }
