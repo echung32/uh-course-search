@@ -401,6 +401,16 @@ export default function globalSetup() {
   // A Kapiolani-only course (different course, so ICS 1110 stays Kapiolani-less),
   // so the leaderboard's campus filter returns a campus-distinct ranking.
   cts.run("202710", "MATH", "1400", "MATH 140", "Precalculus", "Kapiolani Community College", 5, 100, 140, 5, 3, 1);
+  // PHYS 170 — ONE logical course (common-course id "PHYS 170") taught at two
+  // campuses, stored under campus-encoded course numbers (UH common course
+  // numbering: the trailing digit of course_number is the campus). The picker
+  // must collapse these to a single "PHYS 170" entry and the trend must sum the
+  // campus variants. Fill rates kept below ICS 2110 (0.975) so the leaderboard's
+  // rank-0 assertion is unaffected.
+  cts.run("202610", "PHYS", "1700", "PHYS 170", "General Physics", "University of Hawaii at Manoa", 1, 30, 60, 1, 0, 1);
+  cts.run("202610", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 10, 40, 1, 0, 1);
+  cts.run("202710", "PHYS", "1700", "PHYS 170", "General Physics", "University of Hawaii at Manoa", 1, 40, 60, 1, 0, 1);
+  cts.run("202710", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 12, 40, 1, 0, 1);
 
   const tfs = adb.prepare(
     `INSERT INTO term_facet_stats

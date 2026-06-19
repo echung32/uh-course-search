@@ -7,9 +7,10 @@ import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime"
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
 import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
+import { classifyTerm, type Semester } from "./termFilter";
 
 interface TermItem { code: string; description: string }
-interface CourseOption { subject: string; courseNumber: string; subjectCourse: string | null }
+interface CourseOption { subject: string; subjectCourse: string }
 
 function Section({ title, description, children }: {
   title: string; description: string; children: React.ReactNode;
@@ -66,9 +67,38 @@ export function AnalyticsApp({
       (!rangeLo || code >= rangeLo) && (!rangeHi || code <= rangeHi),
     [rangeLo, rangeHi]
   );
+  // Semester + special-session filters (apply to the trend charts alongside the
+  // range). Default: all semesters on, special sub-terms (Extension /
+  // Apprenticeship) hidden.
+  type BaseSemester = Exclude<Semester, "Other">;
+  const [semesters, setSemesters] = React.useState<Record<BaseSemester, boolean>>({
+    Fall: true,
+    Spring: true,
+    Summer: true,
+  });
+  const [showSpecial, setShowSpecial] = React.useState(false);
+  const toggleSemester = (s: BaseSemester) =>
+    setSemesters((prev) => ({ ...prev, [s]: !prev[s] }));
+  // A term shows on the trend charts iff it's in range, its semester is enabled,
+  // and (unless special sessions are shown) it's a base term.
+  const passesTerm = React.useCallback(
+    (code: string) => {
+      if (!inRange(code)) return false;
+      const { semester, special } = classifyTerm(termLabel(code));
+      if (special && !showSpecial) return false;
+      if (semester !== "Other" && !semesters[semester]) return false;
+      return true;
+    },
+    [inRange, termLabel, semesters, showSpecial]
+  );
   const termRangeOptions: ComboboxOption[] = React.useMemo(
     () => sortedTerms.map((c) => ({ value: c, label: termLabel(c) })),
     [sortedTerms, termLabel]
+  );
+  // The "To" picker reads newest-first — the latest term is the usual choice.
+  const termRangeOptionsDesc = React.useMemo(
+    () => [...termRangeOptions].reverse(),
+    [termRangeOptions]
   );
   // "Last N years" preset: first term whose year prefix is within N of newest.
   function setLastYears(years: number) {
@@ -85,11 +115,14 @@ export function AnalyticsApp({
   const isFullRange = fromTerm === "" && toTerm === "";
 
   // ── Chart #1: enrollment over time ──
+  // Keyed on the common-course id: a course offered at several campuses is one
+  // option, and selecting it loads every campus's series (the campus selector
+  // below then filters or sums them).
   const courseOptions: ComboboxOption[] = React.useMemo(
     () =>
       courses.map((c) => ({
-        value: `${c.subject}|${c.courseNumber}`,
-        label: c.subjectCourse ?? `${c.subject} ${c.courseNumber}`,
+        value: c.subjectCourse,
+        label: c.subjectCourse,
         keywords: c.subject,
       })),
     [courses]
@@ -98,8 +131,7 @@ export function AnalyticsApp({
   const [trend, setTrend] = React.useState<CourseTrendPoint[]>([]);
   React.useEffect(() => {
     if (!courseKey) return;
-    const [subject, courseNumber] = courseKey.split("|");
-    fetch(`/api/analytics/enrollment-trend?subject=${encodeURIComponent(subject)}&courseNumber=${encodeURIComponent(courseNumber)}`)
+    fetch(`/api/analytics/enrollment-trend?subjectCourse=${encodeURIComponent(courseKey)}`)
       .then((r) => r.json())
       .then((d) => setTrend(d.points ?? []))
       .catch(() => setTrend([]));
@@ -132,9 +164,9 @@ export function AnalyticsApp({
   const shownPoints = React.useMemo(
     () =>
       trend.filter(
-        (p) => inRange(p.term) && (!campus || p.campus === campus)
+        (p) => passesTerm(p.term) && (!campus || p.campus === campus)
       ),
-    [campus, trend, inRange]
+    [campus, trend, passesTerm]
   );
 
   // ── Chart #4: university trend ──
@@ -147,8 +179,8 @@ export function AnalyticsApp({
       .catch(() => setUni([]));
   }, [facet]);
   const uniInRange = React.useMemo(
-    () => uni.filter((p) => inRange(p.term)),
-    [uni, inRange]
+    () => uni.filter((p) => passesTerm(p.term)),
+    [uni, passesTerm]
   );
 
   // ── Chart #5: delivery mode ──
@@ -160,8 +192,8 @@ export function AnalyticsApp({
       .catch(() => setDelivery([]));
   }, []);
   const deliveryInRange = React.useMemo(
-    () => delivery.filter((p) => inRange(p.term)),
-    [delivery, inRange]
+    () => delivery.filter((p) => passesTerm(p.term)),
+    [delivery, passesTerm]
   );
 
   // ── Chart #2: fill-rate leaderboard ──
@@ -210,7 +242,7 @@ export function AnalyticsApp({
               <span className="text-sm text-muted-foreground">to</span>
               <div className="w-40">
                 <Combobox
-                  options={termRangeOptions}
+                  options={termRangeOptionsDesc}
                   value={toTerm}
                   onChange={setToTerm}
                   clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
@@ -225,6 +257,31 @@ export function AnalyticsApp({
             <Button type="button" size="sm" variant="outline" onClick={() => setLastYears(5)}>Last 5 yrs</Button>
             <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} onClick={resetRange}>All time</Button>
           </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium">Semesters</span>
+          {(["Fall", "Spring", "Summer"] as const).map((s) => (
+            <Button
+              key={s}
+              type="button"
+              size="sm"
+              variant={semesters[s] ? "default" : "outline"}
+              aria-pressed={semesters[s]}
+              onClick={() => toggleSemester(s)}
+            >
+              {s}
+            </Button>
+          ))}
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Button
+            type="button"
+            size="sm"
+            variant={showSpecial ? "default" : "outline"}
+            aria-pressed={showSpecial}
+            onClick={() => setShowSpecial((v) => !v)}
+          >
+            Special sessions
+          </Button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">Applies to the trend charts below.</p>
       </div>

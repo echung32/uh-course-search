@@ -30,10 +30,9 @@ export function fetchRollupTerms(): Promise<string[]> {
 }
 
 export function fetchCourseTrend(
-  subject: string,
-  courseNumber: string
+  subjectCourse: string
 ): Promise<CourseTrendPoint[]> {
-  return getCourseTrend(getAnalyticsDb(), subject, courseNumber);
+  return getCourseTrend(getAnalyticsDb(), subjectCourse);
 }
 
 export function fetchFacetTrend(
