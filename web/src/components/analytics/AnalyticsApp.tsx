@@ -15,9 +15,24 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { NuqsAdapter } from "nuqs/adapters/react";
+import {
+  useQueryStates,
+  parseAsString,
+  parseAsStringLiteral,
+  parseAsBoolean,
+} from "nuqs";
 
 interface TermItem { code: string; description: string }
 interface CourseOption { subject: string; subjectCourse: string }
+
+interface AnalyticsAppProps {
+  terms: TermItem[];
+  courses: CourseOption[];
+  campuses: string[];
+  /** Term codes that actually have rollup data, for the range selector. */
+  rollupTerms: string[];
+}
 
 function Section({ title, description, children }: {
   title: string; description: string; children: React.ReactNode;
@@ -31,18 +46,12 @@ function Section({ title, description, children }: {
   );
 }
 
-export function AnalyticsApp({
+function AnalyticsAppInner({
   terms,
   courses,
   campuses,
   rollupTerms,
-}: {
-  terms: TermItem[];
-  courses: CourseOption[];
-  campuses: string[];
-  /** Term codes that actually have rollup data, for the range selector. */
-  rollupTerms: string[];
-}) {
+}: AnalyticsAppProps) {
   const termLabelMap = React.useMemo(() => {
     const m = new Map<string, string>();
     for (const t of terms) m.set(t.code, t.description);
@@ -67,31 +76,48 @@ export function AnalyticsApp({
     const cutoff = Number(newest.slice(0, 4)) - years;
     return sortedTerms.find((c) => Number(c.slice(0, 4)) >= cutoff) ?? oldest;
   }
-  // "" = open end. Default the range to the last 5 years; "" toTerm means "latest".
-  const [fromTerm, setFromTerm] = React.useState(() => firstTermWithinYears(5));
-  const [toTerm, setToTerm] = React.useState("");
-  const lo = fromTerm || oldest;
-  const hi = toTerm || newest;
-  // Tolerate a reversed pick by ordering the bounds.
-  const rangeLo = lo <= hi ? lo : hi;
-  const rangeHi = lo <= hi ? hi : lo;
+  // Term range + filters live in the URL (nuqs) so a view is shareable. The
+  // range is a preset ("3y"/"5y"/"all") or "custom" with explicit from/to terms.
+  const [q, setQ] = useQueryStates(
+    {
+      range: parseAsStringLiteral(["3y", "5y", "all", "custom"] as const).withDefault("5y"),
+      from: parseAsString.withDefault(""),
+      to: parseAsString.withDefault(""),
+      fall: parseAsBoolean.withDefault(true),
+      spring: parseAsBoolean.withDefault(true),
+      summer: parseAsBoolean.withDefault(true),
+      special: parseAsBoolean.withDefault(false),
+    },
+    { history: "replace" }
+  );
+
+  // Resolve the active range to concrete [rangeLo, rangeHi] bounds.
+  const presetStart = (r: typeof q.range) =>
+    r === "3y" ? firstTermWithinYears(3) : firstTermWithinYears(5);
+  const effFrom =
+    q.range === "custom" ? q.from || oldest : q.range === "all" ? oldest : presetStart(q.range);
+  const effTo = q.range === "custom" ? q.to || newest : newest;
+  const rangeLo = effFrom <= effTo ? effFrom : effTo;
+  const rangeHi = effFrom <= effTo ? effTo : effFrom;
   const inRange = React.useCallback(
     (code: string) =>
       (!rangeLo || code >= rangeLo) && (!rangeHi || code <= rangeHi),
     [rangeLo, rangeHi]
   );
+
   // Semester + special-session filters (apply to the trend charts alongside the
   // range). Default: all semesters on, special sub-terms (Extension /
   // Apprenticeship) hidden.
   type BaseSemester = Exclude<Semester, "Other">;
-  const [semesters, setSemesters] = React.useState<Record<BaseSemester, boolean>>({
-    Fall: true,
-    Spring: true,
-    Summer: true,
-  });
-  const [showSpecial, setShowSpecial] = React.useState(false);
-  const toggleSemester = (s: BaseSemester) =>
-    setSemesters((prev) => ({ ...prev, [s]: !prev[s] }));
+  const semesters: Record<BaseSemester, boolean> = React.useMemo(
+    () => ({ Fall: q.fall, Spring: q.spring, Summer: q.summer }),
+    [q.fall, q.spring, q.summer]
+  );
+  const showSpecial = q.special;
+  const toggleSemester = (s: BaseSemester) => {
+    const key = s.toLowerCase() as "fall" | "spring" | "summer";
+    setQ({ [key]: !semesters[s] });
+  };
   // A term shows on the trend charts iff it's in range, its semester is enabled,
   // and (unless special sessions are shown) it's a base term.
   const passesTerm = React.useCallback(
@@ -113,18 +139,23 @@ export function AnalyticsApp({
     () => [...termRangeOptions].reverse(),
     [termRangeOptions]
   );
-  // "Last N years" preset.
+  // Range presets.
   function setLastYears(years: number) {
-    setFromTerm(firstTermWithinYears(years));
-    setToTerm("");
+    setQ({ range: years === 3 ? "3y" : "5y", from: "", to: "" });
   }
   function resetRange() {
-    setFromTerm("");
-    setToTerm("");
+    setQ({ range: "all", from: "", to: "" });
   }
-  const isFullRange = fromTerm === "" && toTerm === "";
-  const isLastYears = (years: number) =>
-    toTerm === "" && fromTerm !== "" && fromTerm === firstTermWithinYears(years);
+  const isFullRange = q.range === "all";
+  const isLastYears = (years: number) => q.range === (years === 3 ? "3y" : "5y");
+  // The range comboboxes show the resolved bounds; picking a term switches to
+  // custom mode (To stays empty in preset mode so it reads as "Latest").
+  const setFromTerm = (v: string) =>
+    setQ({ range: "custom", from: v, to: q.range === "custom" ? q.to : "" });
+  const setToTerm = (v: string) =>
+    setQ({ range: "custom", to: v, from: q.range === "custom" ? q.from : rangeLo });
+  const fromValue = effFrom;
+  const toValue = q.range === "custom" ? q.to : "";
 
   // ── Chart #1: enrollment over time ──
   // Keyed on the common-course id: a course offered at several campuses is one
@@ -139,7 +170,14 @@ export function AnalyticsApp({
       })),
     [courses]
   );
-  const [courseKey, setCourseKey] = React.useState(courseOptions[0]?.value ?? "");
+  // Default to ICS 101 (normalised match) when present, else the first course.
+  const defaultCourseKey = React.useMemo(() => {
+    const ics101 = courseOptions.find(
+      (o) => o.value.replace(/\s+/g, "").toUpperCase() === "ICS101"
+    );
+    return ics101?.value ?? courseOptions[0]?.value ?? "";
+  }, [courseOptions]);
+  const [courseKey, setCourseKey] = React.useState(defaultCourseKey);
   const [trend, setTrend] = React.useState<CourseTrendPoint[]>([]);
   React.useEffect(() => {
     if (!courseKey) return;
@@ -153,7 +191,7 @@ export function AnalyticsApp({
   // Shows every campus: those with data for this course on top (by enrollment),
   // the rest greyed-out/disabled below so you can see what's missing.
   const [campus, setCampus] = React.useState("");
-  const { campusOptions, biggestCampus } = React.useMemo(() => {
+  const campusOptions: ComboboxOption[] = React.useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of trend) {
       totals.set(p.campus, (totals.get(p.campus) ?? 0) + p.enrollment);
@@ -163,16 +201,15 @@ export function AnalyticsApp({
       .map(([name]) => name);
     const withData = new Set(dataSorted);
     const noData = campuses.filter((c) => !withData.has(c));
-    const options: ComboboxOption[] = [
+    return [
       ...dataSorted.map((name) => ({ value: name, label: name })),
       ...noData.map((name) => ({ value: name, label: name, disabled: true })),
     ];
-    return { campusOptions: options, biggestCampus: dataSorted[0] ?? "" };
   }, [trend, campuses]);
-  // A new course was loaded → default the selector to its biggest campus.
+  // Reset to "All campuses" (summed) when the course changes — the default view.
   React.useEffect(() => {
-    setCampus(biggestCampus);
-  }, [biggestCampus]);
+    setCampus("");
+  }, [courseKey]);
   const shownPoints = React.useMemo(
     () =>
       trend.filter(
@@ -244,7 +281,7 @@ export function AnalyticsApp({
               <div className="w-40">
                 <Combobox
                   options={termRangeOptions}
-                  value={fromTerm}
+                  value={fromValue}
                   onChange={setFromTerm}
                   clearLabel={oldest ? `Earliest (${termLabel(oldest)})` : "Earliest"}
                   placeholder="Earliest"
@@ -255,7 +292,7 @@ export function AnalyticsApp({
               <div className="w-40">
                 <Combobox
                   options={termRangeOptionsDesc}
-                  value={toTerm}
+                  value={toValue}
                   onChange={setToTerm}
                   clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
                   placeholder="Latest"
@@ -290,7 +327,7 @@ export function AnalyticsApp({
             size="sm"
             variant={showSpecial ? "default" : "outline"}
             aria-pressed={showSpecial}
-            onClick={() => setShowSpecial((v) => !v)}
+            onClick={() => setQ({ special: !showSpecial })}
           >
             Special sessions
           </Button>
@@ -350,7 +387,7 @@ export function AnalyticsApp({
         <DeliveryModeShift points={deliveryInRange} termLabel={termLabel} />
       </Section>
 
-      <Section title="Hardest to get into" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">
+      <Section title="Course fill rate" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one.">
         <div className="mb-3 flex flex-wrap gap-2">
           <div className="max-w-xs flex-1">
             <Combobox
@@ -375,5 +412,13 @@ export function AnalyticsApp({
         <FillRateLeaderboard rows={rows} />
       </Section>
     </div>
+  );
+}
+
+export function AnalyticsApp(props: AnalyticsAppProps) {
+  return (
+    <NuqsAdapter>
+      <AnalyticsAppInner {...props} />
+    </NuqsAdapter>
   );
 }

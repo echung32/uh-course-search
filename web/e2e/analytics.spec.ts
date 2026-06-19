@@ -109,16 +109,39 @@ test("page: analytics dashboard renders the four chart sections", async ({ page 
   await expect(page.getByText("Course enrollment over time")).toBeVisible();
   await expect(page.getByText("University enrollment trend")).toBeVisible();
   await expect(page.getByText("Delivery-mode shift")).toBeVisible();
-  await expect(page.getByText("Hardest to get into")).toBeVisible();
+  await expect(page.getByText("Course fill rate")).toBeVisible();
   // Term-range control with its quick presets.
   await expect(page.getByText("Term range")).toBeVisible();
   await expect(page.getByRole("button", { name: "Last 5 yrs" })).toBeVisible();
   // Recharts renders <svg class="recharts-surface"> once data loads.
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
-  // The campus selector defaults to the biggest campus (Manoa).
+  // The enrollment campus selector defaults to "All campuses" (summed).
   await expect(
-    page.getByRole("combobox").filter({ hasText: "Manoa" }).first()
+    page.getByRole("combobox").filter({ hasText: "All campuses" }).first()
   ).toBeVisible({ timeout: 10000 });
+});
+
+test("course picker defaults to ICS 101", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("combobox").filter({ hasText: "ICS 101" })).toBeVisible();
+});
+
+test("term selections persist in the URL (nuqs)", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  await page.getByRole("button", { name: "All time" }).click();
+  await expect(page).toHaveURL(/range=all/);
+  await page.getByRole("button", { name: "Special sessions", exact: true }).click();
+  await expect(page).toHaveURL(/special=true/);
+});
+
+test("term filters initialise from the URL (nuqs)", async ({ page }) => {
+  await page.goto("/analytics?fall=false");
+  // Fall toggled off via the URL → button reflects it and the (all-Fall) default
+  // course's enrollment chart is empty.
+  await expect(page.getByRole("button", { name: "Fall", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText("No data for this course.")).toBeVisible();
 });
 
 test("term range narrows the trend charts", async ({ page }) => {
@@ -164,7 +187,7 @@ test("special-sessions info tooltip explains the term kinds", async ({ page }) =
 test("semester filter removes a semester's terms from the trend charts", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
-  // The enrollment chart starts populated (default course ICS 1110 — all Fall data).
+  // The enrollment chart starts populated (default course ICS 101 — all Fall data).
   await expect(page.getByText("No data for this course.")).toHaveCount(0);
   // Turn the Fall semester off → the (all-Fall) enrollment series empties out.
   await page.getByRole("button", { name: "Fall", exact: true }).click();

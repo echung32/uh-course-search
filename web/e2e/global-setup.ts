@@ -411,6 +411,13 @@ export default function globalSetup() {
   cts.run("202610", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 10, 40, 1, 0, 1);
   cts.run("202710", "PHYS", "1700", "PHYS 170", "General Physics", "University of Hawaii at Manoa", 1, 40, 60, 1, 0, 1);
   cts.run("202710", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 12, 40, 1, 0, 1);
+  // ICS 101 — the dashboard's default course; spans two campuses across both
+  // terms so the default "all campuses" view sums multiple series. Fill rates
+  // kept below ICS 2110 (0.975) so the leaderboard's rank-0 assertion holds.
+  cts.run("202610", "ICS", "1010", "ICS 101", "Tools for the Info World", "University of Hawaii at Manoa", 1, 40, 50, 1, 0, 1);
+  cts.run("202710", "ICS", "1010", "ICS 101", "Tools for the Info World", "University of Hawaii at Manoa", 1, 45, 50, 1, 0, 1);
+  cts.run("202610", "ICS", "1013", "ICS 101", "Tools for the Info World", "Hawaii Community College", 1, 15, 30, 1, 0, 1);
+  cts.run("202710", "ICS", "1013", "ICS 101", "Tools for the Info World", "Hawaii Community College", 1, 18, 30, 1, 0, 1);
 
   const tfs = adb.prepare(
     `INSERT INTO term_facet_stats

@@ -19,11 +19,50 @@ export interface FacetTrendPoint {
  * stack render empty for terms that don't list all facet values (e.g. extension
  * sub-terms with only one campus). Filling 0 keeps the stack continuous.
  */
+/**
+ * Collapse a high-cardinality facet to its biggest `n` values by total
+ * enrollment, folding everything else into a single "Other" series per term.
+ * Keeps stacked charts (e.g. the 52-college university trend) readable. Points
+ * already within `n` distinct values are returned unchanged.
+ */
+export function topNByTotal(points: FacetTrendPoint[], n: number): FacetTrendPoint[] {
+  const totals = new Map<string, number>();
+  for (const p of points) {
+    totals.set(p.facetValue, (totals.get(p.facetValue) ?? 0) + p.enrollment);
+  }
+  if (totals.size <= n) return points;
+  const top = new Set(
+    [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n)
+      .map(([k]) => k)
+  );
+  const out: FacetTrendPoint[] = [];
+  const other = new Map<string, { enrollment: number; sections: number }>();
+  for (const p of points) {
+    if (top.has(p.facetValue)) {
+      out.push(p);
+    } else {
+      const o = other.get(p.term) ?? { enrollment: 0, sections: 0 };
+      o.enrollment += p.enrollment;
+      o.sections += p.sections;
+      other.set(p.term, o);
+    }
+  }
+  for (const [term, o] of other) {
+    out.push({ term, facetValue: "Other", enrollment: o.enrollment, sections: o.sections });
+  }
+  return out;
+}
+
 export function pivotByTerm(points: FacetTrendPoint[]): {
   rows: Array<Record<string, number | string>>;
   keys: string[];
 } {
-  const keys = [...new Set(points.map((p) => p.facetValue))].sort();
+  // "Other" (from topNByTotal) always sorts last so it reads as the catch-all.
+  const keys = [...new Set(points.map((p) => p.facetValue))].sort((a, b) =>
+    a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b)
+  );
   const byTerm = new Map<string, Record<string, number | string>>();
   for (const p of points) {
     const row = byTerm.get(p.term) ?? { term: p.term };
