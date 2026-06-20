@@ -217,71 +217,110 @@ async function readMeetingStats(searchDb: D1Like, term: string): Promise<Meeting
   return out;
 }
 
+// Gap-free recompute: every fresh row is upserted with synced_at=nowMs (so a row
+// is never deleted before its replacement exists), then this term's rows whose
+// synced_at predates the run are deleted as stale. A run that dies mid-write
+// leaves the prior rollups intact (some refreshed, none missing) instead of the
+// old delete-then-insert window where a failed insert left the term empty.
+// `INSERT_CHUNK` keeps each batch under the remote-D1 per-statement param cap.
+
 async function writeCourseStats(
   analyticsDb: D1Like,
   term: string,
-  rows: CourseStatRow[]
+  rows: CourseStatRow[],
+  nowMs: number
 ): Promise<void> {
-  await analyticsDb.prepare("DELETE FROM course_term_stats WHERE term = ?").bind(term).run();
   for (const part of chunk(rows, INSERT_CHUNK)) {
     const stmts: D1PreparedStatement[] = part.map((r) =>
       analyticsDb
         .prepare(
           `INSERT INTO course_term_stats
              (term, subject, course_number, subject_course, course_title, campus,
-              sections, total_enr, total_cap, capped_sections, total_wait, open_sections)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              sections, total_enr, total_cap, capped_sections, total_wait, open_sections, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(term, subject, course_number, campus) DO UPDATE SET
+             subject_course = excluded.subject_course,
+             course_title   = excluded.course_title,
+             sections       = excluded.sections,
+             total_enr      = excluded.total_enr,
+             total_cap      = excluded.total_cap,
+             capped_sections = excluded.capped_sections,
+             total_wait     = excluded.total_wait,
+             open_sections  = excluded.open_sections,
+             synced_at      = excluded.synced_at`
         )
         .bind(
           term, r.subject, r.course_number, r.subject_course, r.course_title, r.campus,
-          r.sections, r.total_enr, r.total_cap, r.capped_sections, r.total_wait, r.open_sections
+          r.sections, r.total_enr, r.total_cap, r.capped_sections, r.total_wait, r.open_sections, nowMs
         )
     );
     if (stmts.length > 0) await analyticsDb.batch(stmts);
   }
+  await analyticsDb
+    .prepare("DELETE FROM course_term_stats WHERE term = ? AND synced_at < ?")
+    .bind(term, nowMs)
+    .run();
 }
 
 async function writeFacetStats(
   analyticsDb: D1Like,
   term: string,
-  rows: FacetStatRow[]
+  rows: FacetStatRow[],
+  nowMs: number
 ): Promise<void> {
-  await analyticsDb.prepare("DELETE FROM term_facet_stats WHERE term = ?").bind(term).run();
   for (const part of chunk(rows, INSERT_CHUNK)) {
     const stmts: D1PreparedStatement[] = part.map((r) =>
       analyticsDb
         .prepare(
           `INSERT INTO term_facet_stats
-             (term, facet, facet_value, sections, total_enr, total_cap, capped_sections, total_wait)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             (term, facet, facet_value, sections, total_enr, total_cap, capped_sections, total_wait, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(term, facet, facet_value) DO UPDATE SET
+             sections       = excluded.sections,
+             total_enr      = excluded.total_enr,
+             total_cap      = excluded.total_cap,
+             capped_sections = excluded.capped_sections,
+             total_wait     = excluded.total_wait,
+             synced_at      = excluded.synced_at`
         )
         .bind(
           term, r.facet, r.facet_value, r.sections, r.total_enr, r.total_cap,
-          r.capped_sections, r.total_wait
+          r.capped_sections, r.total_wait, nowMs
         )
     );
     if (stmts.length > 0) await analyticsDb.batch(stmts);
   }
+  await analyticsDb
+    .prepare("DELETE FROM term_facet_stats WHERE term = ? AND synced_at < ?")
+    .bind(term, nowMs)
+    .run();
 }
 
 async function writeMeetingStats(
   analyticsDb: D1Like,
   term: string,
-  rows: MeetingStatRow[]
+  rows: MeetingStatRow[],
+  nowMs: number
 ): Promise<void> {
-  await analyticsDb.prepare("DELETE FROM term_meeting_stats WHERE term = ?").bind(term).run();
   for (const part of chunk(rows, INSERT_CHUNK)) {
     const stmts: D1PreparedStatement[] = part.map((r) =>
       analyticsDb
         .prepare(
           `INSERT INTO term_meeting_stats
-             (term, campus, day_of_week, start_hour, meetings)
-           VALUES (?, ?, ?, ?, ?)`
+             (term, campus, day_of_week, start_hour, meetings, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(term, campus, day_of_week, start_hour) DO UPDATE SET
+             meetings  = excluded.meetings,
+             synced_at = excluded.synced_at`
         )
-        .bind(term, r.campus, r.day_of_week, r.start_hour, r.meetings)
+        .bind(term, r.campus, r.day_of_week, r.start_hour, r.meetings, nowMs)
     );
     if (stmts.length > 0) await analyticsDb.batch(stmts);
   }
+  await analyticsDb
+    .prepare("DELETE FROM term_meeting_stats WHERE term = ? AND synced_at < ?")
+    .bind(term, nowMs)
+    .run();
 }
 
 export interface RollupSummary {
@@ -291,7 +330,12 @@ export interface RollupSummary {
   meetingRows: number;
 }
 
-/** Recompute both rollup tables for one term (delete-and-replace). */
+/**
+ * Recompute every rollup table for one term. Gap-free: each table is refreshed
+ * by upserting the new rows (stamped with `nowMs`) then deleting this term's
+ * rows left with an older stamp, so a mid-run failure never empties a term (see
+ * the write helpers). `nowMs` is the per-run marker shared across all three.
+ */
 export async function computeTermRollups(
   searchDb: D1Like,
   analyticsDb: D1Like,
@@ -301,9 +345,9 @@ export async function computeTermRollups(
   const courseRows = await readCourseStats(searchDb, term);
   const facetRows = await readFacetStats(searchDb, term);
   const meetingRows = await readMeetingStats(searchDb, term);
-  await writeCourseStats(analyticsDb, term, courseRows);
-  await writeFacetStats(analyticsDb, term, facetRows);
-  await writeMeetingStats(analyticsDb, term, meetingRows);
+  await writeCourseStats(analyticsDb, term, courseRows, nowMs);
+  await writeFacetStats(analyticsDb, term, facetRows, nowMs);
+  await writeMeetingStats(analyticsDb, term, meetingRows, nowMs);
   await analyticsDb
     .prepare(
       `INSERT INTO analytics_meta (key, value) VALUES ('rollups_version', ?)
