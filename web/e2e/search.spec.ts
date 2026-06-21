@@ -133,6 +133,35 @@ test("college filter narrows results to the selected academic college", async ({
   await expect(page.getByRole("cell", { name: "ICS 311" })).toHaveCount(2);
 });
 
+test("College/Department only claim 'not backfilled' when the term truly isn't synced", async ({
+  page,
+}) => {
+  const notBackfilled = page.getByText(
+    "Not available until this term is backfilled.",
+  );
+
+  // Default term (Fall 2026) is backfilled and the default campus (Manoa) has
+  // catalog rows → the College menu is populated (enabled), no message.
+  await expect(page.locator("#college")).toBeEnabled();
+  await expect(notBackfilled).toHaveCount(0);
+
+  // The seeded catalog has no rows for the community colleges. Selecting one
+  // empties the (campus-scoped) College/Department facets — but the term IS
+  // backfilled, so the menus must NOT claim otherwise. (Regression: the message
+  // keyed off facet emptiness, mislabeling Outreach/Extension terms whose campus
+  // descriptions never match the menu.) Wait for the post-fetch campus note to
+  // settle, then assert the misleading message is absent.
+  await selectCampus(page, "Honolulu Community College");
+  await expect(
+    page.getByText("No colleges at the selected campus."),
+  ).toBeVisible();
+  await expect(notBackfilled).toHaveCount(0);
+
+  // A genuinely un-backfilled (dynamic) term still surfaces the message.
+  await pickCombobox(page, "term", "Summer 2026");
+  await expect(notBackfilled.first()).toBeVisible();
+});
+
 test("expanding a section row shows catalog, lazily-fetched detail, and instructor", async ({
   page,
 }) => {

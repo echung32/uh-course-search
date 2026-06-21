@@ -110,7 +110,16 @@ export async function withEdgeCache(
 
   const body = await res.arrayBuffer();
   const stored = new Headers(res.headers);
-  stored.set("Cache-Control", `public, max-age=${profile.ttlSeconds}`);
+  // `s-maxage` is the EDGE (shared-cache) TTL the Cache API honors; `max-age=0,
+  // must-revalidate` stops BROWSERS from caching by raw URL. Invalidation is by
+  // key VERSION, which only the edge sees — a browser that cached a long
+  // `max-age` would keep serving a stale body (e.g. a week for a view-only term)
+  // long after a re-sync moved the edge to a fresh key. Browsers revalidate
+  // every time and hit the edge cache (no D1), so correctness costs nothing.
+  stored.set(
+    "Cache-Control",
+    `public, s-maxage=${profile.ttlSeconds}, max-age=0, must-revalidate`
+  );
   // Stored copy says "hit": that's what a future match will truthfully be.
   stored.set("x-edge-cache", "hit");
   try {

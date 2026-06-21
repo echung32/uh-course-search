@@ -35,9 +35,10 @@ import type {
   SearchCoverage,
   SearchParams,
   SearchResultsResponse,
+  TermListItem,
 } from "@/lib/sis/types";
 
-export async function fetchTerms(): Promise<AutocompleteItem[]> {
+export async function fetchTerms(): Promise<TermListItem[]> {
   return getTerms(getDb());
 }
 
