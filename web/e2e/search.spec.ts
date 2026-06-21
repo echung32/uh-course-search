@@ -332,3 +332,12 @@ test("attribute filter menu lists the seeded codes", async ({ request }) => {
   const codes = (body.options as Array<{ code: string }>).map((o) => o.code);
   expect(codes).toEqual(expect.arrayContaining(["DS", "ETH", "WI"]));
 });
+
+test("results table shows attribute badges with a tooltip", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS&courseNumber=111");
+  // ICS 111 sec 001 (10001) carries WI + ETH — the badge is the only exact-"WI" text.
+  const wi = page.getByText("WI", { exact: true }).first();
+  await expect(wi).toBeVisible();
+  await wi.hover();
+  await expect(page.getByText("Writing Intensive")).toBeVisible();
+});
