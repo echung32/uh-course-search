@@ -49,15 +49,27 @@ export function MultiCombobox({
 }: MultiComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  // The selection snapshot taken when the menu opens. Items selected at open
+  // time float to the top, so reopening surfaces your current picks first. It's
+  // frozen at open (not live `value`) so toggling while open doesn't make rows
+  // jump around under the cursor.
+  const [pinned, setPinned] = React.useState<Set<string>>(new Set());
   const selectedSet = new Set(value);
 
   const q = query.trim().toLowerCase();
   const filtered = React.useMemo(() => {
-    if (q === "") return options;
-    return options.filter((o) =>
-      `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
-    );
-  }, [options, q]);
+    const matches =
+      q === ""
+        ? options
+        : options.filter((o) =>
+            `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
+          );
+    // Stable partition: pinned (selected-at-open) first, original order otherwise.
+    return [
+      ...matches.filter((o) => pinned.has(o.value)),
+      ...matches.filter((o) => !pinned.has(o.value)),
+    ];
+  }, [options, q, pinned]);
 
   const triggerLabel =
     value.length === 0 ? placeholder : `${value.length} selected`;
@@ -68,7 +80,10 @@ export function MultiCombobox({
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (!next) setQuery("");
+    // Snapshot the current selection on open so it sorts to the top; clear the
+    // search box on close so it reopens clean.
+    if (next) setPinned(new Set(value));
+    else setQuery("");
   }
 
   return (

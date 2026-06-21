@@ -5,7 +5,6 @@ import {
   parseAsBoolean,
   parseAsInteger,
   parseAsNativeArrayOf,
-  parseAsStringLiteral,
 } from "nuqs";
 import { NuqsAdapter } from "nuqs/adapters/react";
 import { SearchForm, type SearchFormValues } from "./SearchForm";
@@ -33,7 +32,6 @@ const searchParsers = {
   department: parseAsString.withDefault(""),
   openOnly: parseAsBoolean.withDefault(false),
   attribute: parseAsNativeArrayOf(parseAsString),
-  attrMatch: parseAsStringLiteral(["any", "all"] as const).withDefault("any"),
   crn: parseAsString.withDefault(""),
   page: parseAsInteger.withDefault(1),
   size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE),
@@ -53,7 +51,6 @@ interface SearchQuery {
   department: string;
   openOnly: boolean;
   attribute: string[] | null;
-  attrMatch: "any" | "all";
   crn: string;
   page: number;
   size: number;
@@ -110,12 +107,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
     // Empty college/department means no catalog facet filter — omit.
     if (params.college) query.set("college", params.college);
     if (params.department) query.set("department", params.department);
-    // Attribute filter: repeated params for multi-select (e.g. WI + ETH).
+    // Attribute filter: repeated params for multi-select (e.g. WI + ETH). A
+    // section must carry every selected attribute (match-all is the only mode).
     for (const code of params.attribute ?? []) {
       query.append("attribute", code);
-    }
-    if ((params.attribute ?? []).length > 0 && params.attrMatch === "all") {
-      query.set("attrMatch", "all");
     }
 
     try {
@@ -153,18 +148,17 @@ function SearchAppInner({ terms }: SearchAppProps) {
     // Serialize the array so React's referential check works for repeated values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     (q.attribute ?? []).join(","),
-    q.attrMatch,
     q.crn,
     q.page,
     q.size,
   ]);
 
   // Committing a new search resets to the first page.
-  // The form emits `attributes`/`attributeMatch` but the URL keys are
-  // `attribute`/`attrMatch` — map explicitly so nuqs receives the right keys.
+  // The form emits `attributes` but the URL key is `attribute` — map explicitly
+  // so nuqs receives the right key.
   function handleSearch(params: SearchFormValues) {
-    const { attributes, attributeMatch, ...rest } = params;
-    setQ({ ...rest, attribute: attributes, attrMatch: attributeMatch, page: 1 });
+    const { attributes, ...rest } = params;
+    setQ({ ...rest, attribute: attributes, page: 1 });
   }
 
   // ResultsTable reports the desired 0-based offset; translate to a 1-based page.
@@ -197,7 +191,6 @@ function SearchAppInner({ terms }: SearchAppProps) {
     openOnly: q.openOnly,
     crn: q.crn,
     attributes: q.attribute ?? [],
-    attributeMatch: q.attrMatch,
   };
   // Remount the form whenever the committed filters change (a new search or a
   // Back/Forward navigation) so its draft re-seeds from the URL. Paging changes
@@ -212,7 +205,6 @@ function SearchAppInner({ terms }: SearchAppProps) {
     q.openOnly,
     q.crn,
     (q.attribute ?? []).join(","),
-    q.attrMatch,
   ].join("|");
   const coverageParams: CoverageParams | null = q.term
     ? {

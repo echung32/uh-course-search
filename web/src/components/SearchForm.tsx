@@ -25,10 +25,8 @@ export interface SearchFormValues {
   openOnly: boolean;
   /** CRN search: when set, identifies one section and overrides every other filter. */
   crn: string;
-  /** Attribute codes to filter by (e.g. ["WI","ETH"]). */
+  /** Attribute codes to filter by (e.g. ["WI","ETH"]); a section must carry all of them. */
   attributes: string[];
-  /** How multiple attributes combine. */
-  attributeMatch: "any" | "all";
 }
 
 interface SearchFormProps {
@@ -84,9 +82,6 @@ export function SearchForm({
   const [openOnly, setOpenOnly] = useState(initialValues.openOnly);
   const [crn, setCrn] = useState(initialValues.crn);
   const [attributes, setAttributes] = useState<string[]>(initialValues.attributes);
-  const [attributeMatch, setAttributeMatch] = useState<"any" | "all">(
-    initialValues.attributeMatch
-  );
   const [attributeOptions, setAttributeOptions] = useState<AutocompleteItem[]>([]);
   const [attributesLoading, setAttributesLoading] = useState(false);
 
@@ -130,7 +125,6 @@ export function SearchForm({
     if (!term) return;
     if (attributesSeeded.current) {
       setAttributes([]);
-      setAttributeMatch("any");
     }
     attributesSeeded.current = true;
     let cancelled = false;
@@ -214,7 +208,6 @@ export function SearchForm({
       openOnly,
       crn: crn.trim(),
       attributes,
-      attributeMatch,
     });
   }
 
@@ -363,27 +356,9 @@ export function SearchForm({
             </p>
           ) : (
             attributes.length > 1 && (
-              <div className="flex items-center gap-1 text-xs">
-                <span className="text-muted-foreground">Match</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={attributeMatch === "any" ? "default" : "outline"}
-                  className="h-6 px-2"
-                  onClick={() => setAttributeMatch("any")}
-                >
-                  Any
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={attributeMatch === "all" ? "default" : "outline"}
-                  className="h-6 px-2"
-                  onClick={() => setAttributeMatch("all")}
-                >
-                  All
-                </Button>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Shows sections carrying all selected attributes.
+              </p>
             )
           )}
         </div>

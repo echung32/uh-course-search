@@ -71,12 +71,12 @@ async function handleSearch(
   );
 
   // Repeated ?attribute=WI&attribute=ETH; clamp to ≤20 codes (param-cap safety).
+  // A section must carry every selected attribute (match-all, the only mode).
   const attributes = url.searchParams
     .getAll("attribute")
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean)
     .slice(0, 20);
-  const attributeMatch = url.searchParams.get("attrMatch") === "all" ? "all" : "any";
 
   const params: SearchParams = {
     term,
@@ -87,7 +87,6 @@ async function handleSearch(
     department: url.searchParams.get("department") ?? undefined,
     openOnly: url.searchParams.get("openOnly") === "true",
     attributes,
-    attributeMatch,
     pageOffset: isNaN(pageOffset) ? 0 : pageOffset,
     pageMaxSize: isNaN(pageMaxSize) ? 10 : pageMaxSize,
     sortColumn: url.searchParams.get("sortColumn") ?? "subjectDescription",
