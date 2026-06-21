@@ -370,6 +370,20 @@ test("attribute multi-select filters the results", async ({ page }) => {
   await expect(page).toHaveURL(/attribute=WI/);
 });
 
+test("typing an attribute code ranks that code first (not description matches)", async ({
+  page,
+}) => {
+  // "DS — Diversification: Social Sci" contains the letters "oc" (in "Social"),
+  // so a plain substring search could surface it above the real "OC" code.
+  // Ranking by code keeps OC first. (Seeded codes: DS, ETH, WI — none start with
+  // "OC", so the typed code must out-rank the description match.)
+  await page.goto("/?term=202710&subject=ICS");
+  await page.locator("#attributes").click();
+  await page.getByPlaceholder("Search attributes").fill("DS");
+  // DS is an exact code match → first row, even though "ETH"/others may also match.
+  await expect(page.getByRole("option").first()).toContainText("DS");
+});
+
 test("the attributes menu surfaces selected items on top when reopened", async ({
   page,
 }) => {

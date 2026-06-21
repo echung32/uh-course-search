@@ -58,17 +58,34 @@ export function MultiCombobox({
 
   const q = query.trim().toLowerCase();
   const filtered = React.useMemo(() => {
-    const matches =
-      q === ""
-        ? options
-        : options.filter((o) =>
-            `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
-          );
-    // Stable partition: pinned (selected-at-open) first, original order otherwise.
-    return [
-      ...matches.filter((o) => pinned.has(o.value)),
-      ...matches.filter((o) => !pinned.has(o.value)),
-    ];
+    // Empty query: float the items selected when the menu opened to the top (so
+    // reopening surfaces your current picks first), original order otherwise.
+    if (q === "") {
+      return [
+        ...options.filter((o) => pinned.has(o.value)),
+        ...options.filter((o) => !pinned.has(o.value)),
+      ];
+    }
+    // With a query, rank by how directly it matches the option's *code* (value)
+    // so typing a short code like "OC" surfaces that code first — not unrelated
+    // entries whose description merely contains those letters (e.g. typing "oc"
+    // matching "DS — …Social…"). Ties keep the original (alphabetical) order.
+    const rank = (o: MultiComboboxOption): number => {
+      const v = o.value.toLowerCase();
+      const l = o.label.toLowerCase();
+      if (v === q) return 0;
+      if (v.startsWith(q)) return 1;
+      if (l.startsWith(q)) return 2;
+      if (v.includes(q)) return 3;
+      return 4;
+    };
+    return options
+      .filter((o) =>
+        `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
+      )
+      .map((o, i) => ({ o, i }))
+      .sort((a, b) => rank(a.o) - rank(b.o) || a.i - b.i)
+      .map(({ o }) => o);
   }, [options, q, pinned]);
 
   const triggerLabel =
