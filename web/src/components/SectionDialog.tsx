@@ -16,7 +16,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SectionDetails } from "./SectionDetails";
+import { attributeFamily, FAMILY_BADGE_CLASS, sortAttributes } from "@/lib/attributes";
+import { cn } from "@/lib/utils";
 import { formatDays, formatTime } from "@/lib/meetingTime";
 import type {
   CourseSection,
@@ -80,6 +88,37 @@ function HeaderFacts({ section }: { section: CourseSection }) {
           <span className="text-muted-foreground">{section.scheduleTypeDescription}</span>
         )}
       </div>
+
+      {/* Attributes (Focus / Gen-Ed / IDAP) up top — these are decision-driving
+          requirements, so surface them above enrollment. Color-grouped by family,
+          full description on hover (mirrors the results table). */}
+      {section.sectionAttributes.length > 0 && (
+        <div className="space-y-1">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Attributes
+          </h4>
+          <TooltipProvider delayDuration={150}>
+            <div className="flex flex-wrap gap-1">
+              {sortAttributes(section.sectionAttributes).map((a, i) => (
+                <Tooltip key={`${a.code}-${i}`}>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "cursor-help",
+                        FAMILY_BADGE_CLASS[attributeFamily(a.code)]
+                      )}
+                    >
+                      {a.code}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>{a.description}</TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </TooltipProvider>
+        </div>
+      )}
 
       {/* Enrollment / waitlist, with the open/closed status as the section badge.
           Counts are colored by availability (mirrors the results table). */}
@@ -152,11 +191,13 @@ function MeetingsTable({ meetings }: { meetings: MeetingTime[] }) {
     <div className="rounded-md border">
       <Table>
         <TableHeader>
+          {/* Compact header: the default h-12/text-sm header row is too tall and
+              heavy for this small modal table. */}
           <TableRow>
-            <TableHead className="w-16">Days</TableHead>
-            <TableHead>Time</TableHead>
-            <TableHead>Location</TableHead>
-            <TableHead>Dates</TableHead>
+            <TableHead className="h-8 w-16 text-xs font-medium">Days</TableHead>
+            <TableHead className="h-8 text-xs font-medium">Time</TableHead>
+            <TableHead className="h-8 text-xs font-medium">Location</TableHead>
+            <TableHead className="h-8 text-xs font-medium">Dates</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

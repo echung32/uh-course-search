@@ -287,6 +287,23 @@ test("a CRN permalink opens the detail dialog on load", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("the detail dialog surfaces a section's attributes near the top", async ({
+  page,
+}) => {
+  // CRN 10001 (ICS 111 sec 001) carries Focus attributes WI + ETH. The dialog
+  // shows them as badges under an "Attributes" heading, above enrollment.
+  await page.goto("/?term=202710&view=10001");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("CRN 10001")).toBeVisible();
+
+  const attributes = dialog.getByRole("heading", { name: "Attributes" });
+  await expect(attributes).toBeVisible();
+  await expect(dialog.getByText("WI", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("ETH", { exact: true })).toBeVisible();
+});
+
 test("course number filter narrows the results", async ({ page }) => {
   // First search: subject only.
   await runSearch(page, "ICS", "");
