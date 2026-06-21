@@ -564,25 +564,18 @@ function buildSectionFilter(params: SearchParams): {
   }
   if (params.openOnly) clauses.push("cs.open_section = 1");
 
-  // Attribute filter: subquery against section_attribute (term+crn). Works with
-  // or without the course JOIN since it keys on cs.term/cs.crn. Dedupe the codes
-  // so ALL's N matches the distinct selection.
+  // Attribute filter: a section must carry EVERY selected attribute (match-all).
+  // Subquery against section_attribute (term+crn); works with or without the
+  // course JOIN since it keys on cs.term/cs.crn. Dedupe the codes so the count
+  // comparison matches the distinct selection.
   const attrCodes = [...new Set((params.attributes ?? []).filter(Boolean))];
   if (attrCodes.length > 0) {
     const inList = attrCodes.map(() => "?").join(",");
-    if ((params.attributeMatch ?? "any") === "all") {
-      clauses.push(
-        `(SELECT COUNT(DISTINCT sa.code) FROM section_attribute sa`
-          + ` WHERE sa.term = cs.term AND sa.crn = cs.crn AND sa.code IN (${inList})) = ?`
-      );
-      binds.push(...attrCodes, attrCodes.length);
-    } else {
-      clauses.push(
-        `EXISTS (SELECT 1 FROM section_attribute sa`
-          + ` WHERE sa.term = cs.term AND sa.crn = cs.crn AND sa.code IN (${inList}))`
-      );
-      binds.push(...attrCodes);
-    }
+    clauses.push(
+      `(SELECT COUNT(DISTINCT sa.code) FROM section_attribute sa`
+        + ` WHERE sa.term = cs.term AND sa.crn = cs.crn AND sa.code IN (${inList})) = ?`
+    );
+    binds.push(...attrCodes, attrCodes.length);
   }
 
   const from =

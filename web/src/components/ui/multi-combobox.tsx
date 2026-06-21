@@ -49,15 +49,44 @@ export function MultiCombobox({
 }: MultiComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  // The selection snapshot taken when the menu opens. Items selected at open
+  // time float to the top, so reopening surfaces your current picks first. It's
+  // frozen at open (not live `value`) so toggling while open doesn't make rows
+  // jump around under the cursor.
+  const [pinned, setPinned] = React.useState<Set<string>>(new Set());
   const selectedSet = new Set(value);
 
   const q = query.trim().toLowerCase();
   const filtered = React.useMemo(() => {
-    if (q === "") return options;
-    return options.filter((o) =>
-      `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
-    );
-  }, [options, q]);
+    // Empty query: float the items selected when the menu opened to the top (so
+    // reopening surfaces your current picks first), original order otherwise.
+    if (q === "") {
+      return [
+        ...options.filter((o) => pinned.has(o.value)),
+        ...options.filter((o) => !pinned.has(o.value)),
+      ];
+    }
+    // With a query, rank by how directly it matches the option's *code* (value)
+    // so typing a short code like "OC" surfaces that code first — not unrelated
+    // entries whose description merely contains those letters (e.g. typing "oc"
+    // matching "DS — …Social…"). Ties keep the original (alphabetical) order.
+    const rank = (o: MultiComboboxOption): number => {
+      const v = o.value.toLowerCase();
+      const l = o.label.toLowerCase();
+      if (v === q) return 0;
+      if (v.startsWith(q)) return 1;
+      if (l.startsWith(q)) return 2;
+      if (v.includes(q)) return 3;
+      return 4;
+    };
+    return options
+      .filter((o) =>
+        `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
+      )
+      .map((o, i) => ({ o, i }))
+      .sort((a, b) => rank(a.o) - rank(b.o) || a.i - b.i)
+      .map(({ o }) => o);
+  }, [options, q, pinned]);
 
   const triggerLabel =
     value.length === 0 ? placeholder : `${value.length} selected`;
@@ -68,7 +97,10 @@ export function MultiCombobox({
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (!next) setQuery("");
+    // Snapshot the current selection on open so it sorts to the top; clear the
+    // search box on close so it reopens clean.
+    if (next) setPinned(new Set(value));
+    else setQuery("");
   }
 
   return (

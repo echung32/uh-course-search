@@ -287,6 +287,23 @@ test("a CRN permalink opens the detail dialog on load", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("the detail dialog surfaces a section's attributes near the top", async ({
+  page,
+}) => {
+  // CRN 10001 (ICS 111 sec 001) carries Focus attributes WI + ETH. The dialog
+  // shows them as badges under an "Attributes" heading, above enrollment.
+  await page.goto("/?term=202710&view=10001");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("CRN 10001")).toBeVisible();
+
+  const attributes = dialog.getByRole("heading", { name: "Attributes" });
+  await expect(attributes).toBeVisible();
+  await expect(dialog.getByText("WI", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("ETH", { exact: true })).toBeVisible();
+});
+
 test("course number filter narrows the results", async ({ page }) => {
   // First search: subject only.
   await runSearch(page, "ICS", "");
@@ -307,21 +324,15 @@ test("course number filter narrows the results", async ({ page }) => {
   await expect(page.getByText(/of 6 sections/)).toBeVisible();
 });
 
-test("attribute filter (ANY) narrows to sections carrying the tag", async ({ page }) => {
+test("attribute filter narrows to sections carrying the tag", async ({ page }) => {
   // WI is on ICS 111 sec 001 (10001) and ICS 311 sec 001 (10005) → 2 sections.
   await page.goto("/?term=202710&subject=ICS&attribute=WI");
   await expect(page.getByText(/of 2 sections/)).toBeVisible();
 });
 
-test("attribute filter (ANY, multiple) is a union", async ({ page }) => {
-  // WI ∪ DS → 10001, 10005 (WI) + 10003 (DS) = 3 sections.
-  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=DS&attrMatch=any");
-  await expect(page.getByText(/of 3 sections/)).toBeVisible();
-});
-
-test("attribute filter (ALL) requires every selected tag", async ({ page }) => {
-  // WI ∩ ETH → only 10001 has both = 1 section.
-  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=ETH&attrMatch=all");
+test("attribute filter requires every selected tag (match-all)", async ({ page }) => {
+  // Multiple attributes intersect: WI ∩ ETH → only 10001 has both = 1 section.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=ETH");
   await expect(page.getByText(/of 1 sections/)).toBeVisible();
 });
 
@@ -357,4 +368,33 @@ test("attribute multi-select filters the results", async ({ page }) => {
   await expect(page.getByText(/of 2 sections/)).toBeVisible();
   // The committed filter is reflected in the shareable URL.
   await expect(page).toHaveURL(/attribute=WI/);
+});
+
+test("typing an attribute code ranks that code first (not description matches)", async ({
+  page,
+}) => {
+  // "DS — Diversification: Social Sci" contains the letters "oc" (in "Social"),
+  // so a plain substring search could surface it above the real "OC" code.
+  // Ranking by code keeps OC first. (Seeded codes: DS, ETH, WI — none start with
+  // "OC", so the typed code must out-rank the description match.)
+  await page.goto("/?term=202710&subject=ICS");
+  await page.locator("#attributes").click();
+  await page.getByPlaceholder("Search attributes").fill("DS");
+  // DS is an exact code match → first row, even though "ETH"/others may also match.
+  await expect(page.getByRole("option").first()).toContainText("DS");
+});
+
+test("the attributes menu surfaces selected items on top when reopened", async ({
+  page,
+}) => {
+  await page.goto("/?term=202710&subject=ICS");
+
+  // The menu lists codes alphabetically: DS, ETH, WI. Pick WI (last).
+  await page.locator("#attributes").click();
+  await page.getByRole("option", { name: /WI/ }).first().click();
+  await page.keyboard.press("Escape");
+
+  // Reopen — the selected WI should now sort to the top of the list.
+  await page.locator("#attributes").click();
+  await expect(page.getByRole("option").first()).toContainText("WI");
 });
