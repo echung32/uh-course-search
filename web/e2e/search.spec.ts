@@ -341,3 +341,20 @@ test("results table shows attribute badges with a tooltip", async ({ page }) => 
   await wi.hover();
   await expect(page.getByText("Writing Intensive")).toBeVisible();
 });
+
+test("attribute multi-select filters the results", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+
+  // Open the Attributes multi-select and choose WI.
+  await page.locator("#attributes").click();
+  const input = page.getByPlaceholder("Search attributes");
+  await input.fill("WI");
+  await page.getByRole("option", { name: /WI/ }).first().click();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+  // The committed filter is reflected in the shareable URL.
+  await expect(page).toHaveURL(/attribute=WI/);
+});

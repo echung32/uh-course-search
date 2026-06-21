@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { MultiCombobox } from "@/components/ui/multi-combobox";
 import type { AutocompleteItem } from "@/lib/sis/types";
 import {
   UH_CAMPUSES,
@@ -12,6 +13,7 @@ import {
   ALL_CAMPUSES,
   campusDescriptionForCode,
 } from "@/lib/campuses";
+import { attributeFamily, FAMILY_LABEL } from "@/lib/attributes";
 
 export interface SearchFormValues {
   term: string;
@@ -23,6 +25,10 @@ export interface SearchFormValues {
   openOnly: boolean;
   /** CRN search: when set, identifies one section and overrides every other filter. */
   crn: string;
+  /** Attribute codes to filter by (e.g. ["WI","ETH"]). */
+  attributes: string[];
+  /** How multiple attributes combine. */
+  attributeMatch: "any" | "all";
 }
 
 interface SearchFormProps {
@@ -77,6 +83,12 @@ export function SearchForm({
   const [department, setDepartment] = useState(initialValues.department);
   const [openOnly, setOpenOnly] = useState(initialValues.openOnly);
   const [crn, setCrn] = useState(initialValues.crn);
+  const [attributes, setAttributes] = useState<string[]>(initialValues.attributes);
+  const [attributeMatch, setAttributeMatch] = useState<"any" | "all">(
+    initialValues.attributeMatch
+  );
+  const [attributeOptions, setAttributeOptions] = useState<AutocompleteItem[]>([]);
+  const [attributesLoading, setAttributesLoading] = useState(false);
 
   const [subjectOptions, setSubjectOptions] = useState<AutocompleteItem[]>([]);
   const [collegeOptions, setCollegeOptions] = useState<AutocompleteItem[]>([]);
@@ -106,6 +118,33 @@ export function SearchForm({
       })
       .catch(() => {
         if (!cancelled) setSubjectOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [term]);
+
+  // Attribute menu depends only on the term (sourced from section_attribute).
+  const attributesSeeded = useRef(false);
+  useEffect(() => {
+    if (!term) return;
+    if (attributesSeeded.current) {
+      setAttributes([]);
+      setAttributeMatch("any");
+    }
+    attributesSeeded.current = true;
+    let cancelled = false;
+    setAttributesLoading(true);
+    fetch(`/api/filters?term=${encodeURIComponent(term)}&kind=attribute`)
+      .then((r) => (r.ok ? r.json() : { options: [] }))
+      .then((d) => {
+        if (!cancelled) setAttributeOptions((d.options ?? []) as AutocompleteItem[]);
+      })
+      .catch(() => {
+        if (!cancelled) setAttributeOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAttributesLoading(false);
       });
     return () => {
       cancelled = true;
@@ -154,6 +193,9 @@ export function SearchForm({
   // the fields in that case so they don't look like a no-op the user can set.
   const collegeUnavailable = !catalogLoading && collegeOptions.length === 0;
   const departmentUnavailable = !catalogLoading && departmentOptions.length === 0;
+  // Attributes (like college/department) are only filterable for backfilled terms
+  // whose section_attribute rows exist; the menu is empty otherwise.
+  const attributesUnavailable = !attributesLoading && attributeOptions.length === 0;
 
   // A CRN identifies exactly one section, so a CRN search ignores every other
   // filter — disable them to make that exclusivity obvious.
@@ -171,6 +213,8 @@ export function SearchForm({
       department,
       openOnly,
       crn: crn.trim(),
+      attributes,
+      attributeMatch,
     });
   }
 
@@ -294,6 +338,53 @@ export function SearchForm({
             <p className="text-xs text-muted-foreground">
               Not available until this term is backfilled.
             </p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="attributes">Attributes</Label>
+          <MultiCombobox
+            id="attributes"
+            options={attributeOptions.map((a) => ({
+              value: a.code,
+              label: `${a.code} — ${decodeEntities(a.description)} (${FAMILY_LABEL[attributeFamily(a.code)]})`,
+              keywords: a.description,
+            }))}
+            value={attributes}
+            onChange={setAttributes}
+            placeholder="All Attributes"
+            searchPlaceholder="Search attributes…"
+            emptyText="No attributes for this term."
+            disabled={attributesUnavailable || crnMode}
+          />
+          {attributesUnavailable ? (
+            <p className="text-xs text-muted-foreground">
+              Not available until this term is backfilled.
+            </p>
+          ) : (
+            attributes.length > 1 && (
+              <div className="flex items-center gap-1 text-xs">
+                <span className="text-muted-foreground">Match</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={attributeMatch === "any" ? "default" : "outline"}
+                  className="h-6 px-2"
+                  onClick={() => setAttributeMatch("any")}
+                >
+                  Any
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={attributeMatch === "all" ? "default" : "outline"}
+                  className="h-6 px-2"
+                  onClick={() => setAttributeMatch("all")}
+                >
+                  All
+                </Button>
+              </div>
+            )
           )}
         </div>
 

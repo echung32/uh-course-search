@@ -160,8 +160,11 @@ function SearchAppInner({ terms }: SearchAppProps) {
   ]);
 
   // Committing a new search resets to the first page.
+  // The form emits `attributes`/`attributeMatch` but the URL keys are
+  // `attribute`/`attrMatch` — map explicitly so nuqs receives the right keys.
   function handleSearch(params: SearchFormValues) {
-    setQ({ ...params, page: 1 });
+    const { attributes, attributeMatch, ...rest } = params;
+    setQ({ ...rest, attribute: attributes, attrMatch: attributeMatch, page: 1 });
   }
 
   // ResultsTable reports the desired 0-based offset; translate to a 1-based page.
@@ -193,6 +196,8 @@ function SearchAppInner({ terms }: SearchAppProps) {
     department: q.department,
     openOnly: q.openOnly,
     crn: q.crn,
+    attributes: q.attribute ?? [],
+    attributeMatch: q.attrMatch,
   };
   // Remount the form whenever the committed filters change (a new search or a
   // Back/Forward navigation) so its draft re-seeds from the URL. Paging changes
@@ -206,6 +211,8 @@ function SearchAppInner({ terms }: SearchAppProps) {
     q.department,
     q.openOnly,
     q.crn,
+    (q.attribute ?? []).join(","),
+    q.attrMatch,
   ].join("|");
   const coverageParams: CoverageParams | null = q.term
     ? {
