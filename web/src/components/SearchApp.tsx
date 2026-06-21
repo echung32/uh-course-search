@@ -12,10 +12,10 @@ import { ResultsTable } from "./ResultsTable";
 import { SectionDialog } from "./SectionDialog";
 import type { CoverageParams } from "./CoverageDialog";
 import { ALL_CAMPUSES, DEFAULT_CAMPUS } from "@/lib/campuses";
-import type { AutocompleteItem, SearchResultsResponse } from "@/lib/sis/types";
+import type { SearchResultsResponse, TermListItem } from "@/lib/sis/types";
 
 interface SearchAppProps {
-  terms: AutocompleteItem[];
+  terms: TermListItem[];
 }
 
 const DEFAULT_PAGE_SIZE = 20;

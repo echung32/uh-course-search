@@ -13,6 +13,11 @@ export interface AutocompleteItem {
   description: string;
 }
 
+/** A term-menu entry plus whether its catalog/sections have been backfilled. */
+export interface TermListItem extends AutocompleteItem {
+  backfilled: boolean;
+}
+
 export interface MeetingTime {
   beginTime: string | null;
   endTime: string | null;

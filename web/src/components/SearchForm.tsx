@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { MultiCombobox } from "@/components/ui/multi-combobox";
-import type { AutocompleteItem } from "@/lib/sis/types";
+import type { AutocompleteItem, TermListItem } from "@/lib/sis/types";
 import {
   UH_CAMPUSES,
   DEFAULT_CAMPUS,
@@ -30,7 +30,7 @@ export interface SearchFormValues {
 }
 
 interface SearchFormProps {
-  terms: AutocompleteItem[];
+  terms: TermListItem[];
   /** Draft seed, derived from the shareable URL state. */
   initialValues: SearchFormValues;
   onSearch: (params: SearchFormValues) => void;
@@ -181,12 +181,21 @@ export function SearchForm({
     };
   }, [term, campus]);
 
-  // College/Department are catalog-derived. They're empty (so unusable) for terms
-  // whose catalog isn't synced — every not-yet-backfilled ("dynamic") term, whose
-  // searches run through the page cache where these filters aren't applied. Disable
-  // the fields in that case so they don't look like a no-op the user can set.
+  // Whether the selected term has been backfilled (full catalog) vs. dynamic
+  // (page-cache only, no catalog facets). Drives honest "not backfilled"
+  // messaging — an empty facet alone doesn't mean the term isn't synced.
+  const termBackfilled = terms.find((t) => t.code === term)?.backfilled ?? true;
+
+  // College/Department are catalog-derived and campus-scoped, so they're empty
+  // (unusable) in two distinct cases that must be messaged differently:
+  //   1. the term isn't backfilled (dynamic) — no catalog exists at all; or
+  //   2. the term IS backfilled but the selected campus has no catalog rows
+  //      (e.g. Outreach/Extension terms, whose campus descriptions never match
+  //      the campus menu, default Manoa). Saying "not backfilled" there is a lie.
+  // Either way the field is disabled (nothing to pick); only the note differs.
   const collegeUnavailable = !catalogLoading && collegeOptions.length === 0;
   const departmentUnavailable = !catalogLoading && departmentOptions.length === 0;
+  const campusSelected = campus !== ALL_CAMPUSES;
   // Attributes (like college/department) are only filterable for backfilled terms
   // whose section_attribute rows exist; the menu is empty otherwise.
   const attributesUnavailable = !attributesLoading && attributeOptions.length === 0;
@@ -307,11 +316,18 @@ export function SearchForm({
             clearLabel="All Colleges"
             disabled={collegeUnavailable || crnMode}
           />
-          {collegeUnavailable && (
-            <p className="text-xs text-muted-foreground">
-              Not available until this term is backfilled.
-            </p>
-          )}
+          {collegeUnavailable &&
+            (termBackfilled ? (
+              campusSelected && (
+                <p className="text-xs text-muted-foreground">
+                  No colleges at the selected campus.
+                </p>
+              )
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Not available until this term is backfilled.
+              </p>
+            ))}
         </div>
 
         <div className="space-y-2">
@@ -327,11 +343,18 @@ export function SearchForm({
             clearLabel="All Departments"
             disabled={departmentUnavailable || crnMode}
           />
-          {departmentUnavailable && (
-            <p className="text-xs text-muted-foreground">
-              Not available until this term is backfilled.
-            </p>
-          )}
+          {departmentUnavailable &&
+            (termBackfilled ? (
+              campusSelected && (
+                <p className="text-xs text-muted-foreground">
+                  No departments at the selected campus.
+                </p>
+              )
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Not available until this term is backfilled.
+              </p>
+            ))}
         </div>
 
         <div className="space-y-2">
@@ -350,7 +373,7 @@ export function SearchForm({
             emptyText="No attributes for this term."
             disabled={attributesUnavailable || crnMode}
           />
-          {attributesUnavailable ? (
+          {attributesUnavailable && !termBackfilled ? (
             <p className="text-xs text-muted-foreground">
               Not available until this term is backfilled.
             </p>

@@ -9,6 +9,7 @@ import type {
   SearchCoverage,
   SearchParams,
   SearchResultsResponse,
+  TermListItem,
 } from "@/lib/sis/types";
 import type { D1Like } from "./types";
 import { campusDescriptionForCode } from "@/lib/campuses";
@@ -103,13 +104,20 @@ export async function getTermSyncMeta(
 }
 
 /** Serves the term dropdown from D1, preserving Banner's verbatim descriptions. */
-export async function getTerms(db: D1Like): Promise<AutocompleteItem[]> {
+export async function getTerms(db: D1Like): Promise<TermListItem[]> {
   const { results } = await db
     .prepare(
-      "SELECT code, description FROM term ORDER BY display_order DESC, code DESC"
+      "SELECT code, description, last_synced_at FROM term ORDER BY display_order DESC, code DESC"
     )
-    .all<{ code: string; description: string }>();
-  return results.map((r) => ({ code: r.code, description: r.description }));
+    .all<{ code: string; description: string; last_synced_at: number | null }>();
+  return results.map((r) => ({
+    code: r.code,
+    description: r.description,
+    // A backfilled term has a full catalog (College/Department facets, SQL
+    // search path); a dynamic term (never synced) serves via the page cache and
+    // has none — the form uses this to message "not backfilled" honestly.
+    backfilled: r.last_synced_at != null,
+  }));
 }
 
 /**
