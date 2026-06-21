@@ -70,6 +70,13 @@ export interface MeetingRow {
   sunday: number;
 }
 
+export interface AttributeRow {
+  term: string;
+  crn: string;
+  code: string;
+  description: string | null;
+}
+
 /** Read path: a stored row → the exact `CourseSection` Banner returned. */
 export function rowToCourseSection(row: { raw_json: string }): CourseSection {
   return JSON.parse(row.raw_json) as CourseSection;
@@ -150,6 +157,23 @@ export function sectionToMeetingRows(section: CourseSection): MeetingRow[] {
       sunday: bool(m.sunday),
     };
   });
+}
+
+/** Write path: per-section attribute rows (deduped by code). */
+export function sectionToAttributeRows(section: CourseSection): AttributeRow[] {
+  const seen = new Set<string>();
+  const rows: AttributeRow[] = [];
+  for (const a of section.sectionAttributes ?? []) {
+    if (!a.code || seen.has(a.code)) continue;
+    seen.add(a.code);
+    rows.push({
+      term: section.term,
+      crn: section.courseReferenceNumber,
+      code: a.code,
+      description: a.description ?? null,
+    });
+  }
+  return rows;
 }
 
 /** Whether a Banner term description marks a view-only (past) term. */

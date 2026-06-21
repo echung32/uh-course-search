@@ -44,6 +44,26 @@ test("admin sync ingests the mock catalog into D1", async ({ request }) => {
   ).toBe(2);
 });
 
+test("sync populates section_attribute from CourseSection.sectionAttributes", async () => {
+  const db = new DatabaseSync(findLocalD1File("course_section"), { readOnly: true });
+  try {
+    const wi = db
+      .prepare(
+        "SELECT code, description FROM section_attribute WHERE term = ? AND crn = ? ORDER BY code"
+      )
+      .all(TERM, "10001") as Array<{ code: string; description: string }>;
+    expect(wi.map((r) => r.code)).toEqual(["ETH", "WI"]);
+    expect(wi.find((r) => r.code === "WI")?.description).toBe("Writing Intensive");
+
+    const ds = db
+      .prepare("SELECT code FROM section_attribute WHERE term = ? AND crn = ?")
+      .all(TERM, "10003") as Array<{ code: string }>;
+    expect(ds.map((r) => r.code)).toEqual(["DS"]);
+  } finally {
+    db.close();
+  }
+});
+
 test("backfilled term exposes a data-freshness summary and per-window grid", async ({ request }) => {
   // 202730 is fully backfilled (above), so coverage reports data freshness
   // (mode "backfill", everything present) rather than cached-vs-not. The grid is
