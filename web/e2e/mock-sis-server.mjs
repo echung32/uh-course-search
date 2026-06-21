@@ -131,6 +131,16 @@ const CATALOG = [
   section("20003", "MATH", "243", "001", "Calculus III"),
 ];
 
+// Give two sections real attributes so the ingest path exercises
+// section_attribute writes (and the read-path filter has data via sync).
+CATALOG.find((s) => s.courseReferenceNumber === "10001").sectionAttributes = [
+  { code: "WI", description: "Writing Intensive" },
+  { code: "ETH", description: "Contemporary Ethical Issues" },
+];
+CATALOG.find((s) => s.courseReferenceNumber === "10003").sectionAttributes = [
+  { code: "DS", description: "Diversification: Social Sci" },
+];
+
 // One section has faculty so the instructor (contact-card) pass has a banner_id.
 CATALOG.find((s) => s.courseReferenceNumber === "10005").faculty = [
   {
@@ -161,6 +171,17 @@ const CATALOG_PHASE2 = [
   section("20001", "MATH", "241", "001", "Calculus I"),
   section("20002", "MATH", "242", "001", "Calculus II"),
   section("20003", "MATH", "243", "001", "Calculus III"),
+];
+
+// Carry forward the attributes for sections that keep the same structural fields
+// in phase 2 (10001 is a seat-only change; its attributes must be identical so
+// the fingerprint agrees and it stays classified "seat-only", not "structural").
+CATALOG_PHASE2.find((s) => s.courseReferenceNumber === "10001").sectionAttributes = [
+  { code: "WI", description: "Writing Intensive" },
+  { code: "ETH", description: "Contemporary Ethical Issues" },
+];
+CATALOG_PHASE2.find((s) => s.courseReferenceNumber === "10003").sectionAttributes = [
+  { code: "DS", description: "Diversification: Social Sci" },
 ];
 
 // Preserve the faculty entry on 10005 in phase 2 as well, but with a different

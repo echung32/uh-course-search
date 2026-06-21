@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
+import { execSync } from "node:child_process";
 import { findLocalD1File } from "./d1-helpers";
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
@@ -42,6 +43,26 @@ test("admin sync ingests the mock catalog into D1", async ({ request }) => {
   expect(
     await searchCount(request, { term: TERM, subject: "ICS", courseNumber: "111", pageMaxSize: "50" })
   ).toBe(2);
+});
+
+test("sync populates section_attribute from CourseSection.sectionAttributes", async () => {
+  const db = new DatabaseSync(findLocalD1File("course_section"), { readOnly: true });
+  try {
+    const wi = db
+      .prepare(
+        "SELECT code, description FROM section_attribute WHERE term = ? AND crn = ? ORDER BY code"
+      )
+      .all(TERM, "10001") as Array<{ code: string; description: string }>;
+    expect(wi.map((r) => r.code)).toEqual(["ETH", "WI"]);
+    expect(wi.find((r) => r.code === "WI")?.description).toBe("Writing Intensive");
+
+    const ds = db
+      .prepare("SELECT code FROM section_attribute WHERE term = ? AND crn = ?")
+      .all(TERM, "10003") as Array<{ code: string }>;
+    expect(ds.map((r) => r.code)).toEqual(["DS"]);
+  } finally {
+    db.close();
+  }
 });
 
 test("backfilled term exposes a data-freshness summary and per-window grid", async ({ request }) => {
@@ -410,6 +431,37 @@ test("admin rollups recomputes analytics stats for a term", async ({ request }) 
     expect(online!.total_enr).toBe(5);
   } finally {
     adb.close();
+  }
+});
+
+test("backfill-attributes repopulates section_attribute from raw_json", async () => {
+  const file = findLocalD1File("course_section");
+
+  // Wipe the attribute rows the sync wrote, leaving raw_json intact.
+  const rw = new DatabaseSync(file);
+  try {
+    rw.prepare("DELETE FROM section_attribute WHERE term = ?").run(TERM);
+    const after = rw.prepare("SELECT COUNT(*) AS n FROM section_attribute WHERE term = ?").get(TERM) as { n: number };
+    expect(after.n).toBe(0);
+  } finally {
+    rw.close();
+  }
+
+  // Run the CLI against the e2e D1 file (local mode, file override).
+  execSync(`yarn ingest backfill-attributes --term ${TERM}`, {
+    cwd: process.cwd(),
+    env: { ...process.env, D1_MODE: "local", SEARCH_D1_LOCAL_FILE: file },
+    stdio: "pipe",
+  });
+
+  const ro = new DatabaseSync(file, { readOnly: true });
+  try {
+    const wi = ro
+      .prepare("SELECT code FROM section_attribute WHERE term = ? AND crn = ? ORDER BY code")
+      .all(TERM, "10001") as Array<{ code: string }>;
+    expect(wi.map((r) => r.code)).toEqual(["ETH", "WI"]);
+  } finally {
+    ro.close();
   }
 });
 

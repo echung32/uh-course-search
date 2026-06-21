@@ -306,3 +306,55 @@ test("course number filter narrows the results", async ({ page }) => {
   await runSearch(page, "ICS", "");
   await expect(page.getByText(/of 6 sections/)).toBeVisible();
 });
+
+test("attribute filter (ANY) narrows to sections carrying the tag", async ({ page }) => {
+  // WI is on ICS 111 sec 001 (10001) and ICS 311 sec 001 (10005) → 2 sections.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI");
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+});
+
+test("attribute filter (ANY, multiple) is a union", async ({ page }) => {
+  // WI ∪ DS → 10001, 10005 (WI) + 10003 (DS) = 3 sections.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=DS&attrMatch=any");
+  await expect(page.getByText(/of 3 sections/)).toBeVisible();
+});
+
+test("attribute filter (ALL) requires every selected tag", async ({ page }) => {
+  // WI ∩ ETH → only 10001 has both = 1 section.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=ETH&attrMatch=all");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+});
+
+test("attribute filter menu lists the seeded codes", async ({ request }) => {
+  const res = await request.get("/api/filters?term=202710&kind=attribute");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const codes = (body.options as Array<{ code: string }>).map((o) => o.code);
+  expect(codes).toEqual(expect.arrayContaining(["DS", "ETH", "WI"]));
+});
+
+test("results table shows attribute badges with a tooltip", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS&courseNumber=111");
+  // ICS 111 sec 001 (10001) carries WI + ETH — the badge is the only exact-"WI" text.
+  const wi = page.getByText("WI", { exact: true }).first();
+  await expect(wi).toBeVisible();
+  await wi.hover();
+  await expect(page.getByText("Writing Intensive")).toBeVisible();
+});
+
+test("attribute multi-select filters the results", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+
+  // Open the Attributes multi-select and choose WI.
+  await page.locator("#attributes").click();
+  const input = page.getByPlaceholder("Search attributes");
+  await input.fill("WI");
+  await page.getByRole("option", { name: /WI/ }).first().click();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+  // The committed filter is reflected in the shareable URL.
+  await expect(page).toHaveURL(/attribute=WI/);
+});

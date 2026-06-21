@@ -7,9 +7,11 @@ import type { CatalogDetails } from "@/lib/sis/parse/catalogDetails";
 import type { D1Like, D1PreparedStatement } from "./types";
 import {
   isViewOnly,
+  sectionToAttributeRows,
   sectionToFacultyRows,
   sectionToMeetingRows,
   sectionToRow,
+  type AttributeRow,
   type CourseSectionRow,
   type FacultyRow,
   type MeetingRow,
@@ -66,6 +68,10 @@ const MEETING_COLUMNS: (keyof MeetingRow)[] = [
   "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 ];
 
+const ATTRIBUTE_COLUMNS: (keyof AttributeRow)[] = [
+  "term", "crn", "code", "description",
+];
+
 /**
  * Inserts section rows + their child faculty/meeting rows for the given sections.
  * No deletes — caller is responsible for pre-clearing any rows that must be
@@ -81,6 +87,7 @@ export async function insertSectionsAndChildren(
   const sectionRows = sections.map((s) => sectionToRow(s, syncedAt));
   const facultyRows = sections.flatMap(sectionToFacultyRows);
   const meetingRows = sections.flatMap(sectionToMeetingRows);
+  const attributeRows = sections.flatMap(sectionToAttributeRows);
 
   for (const part of chunk(sectionRows, rowsPerChunk(SECTION_COLUMNS.length))) {
     await db.batch([insertStatement(db, "course_section", SECTION_COLUMNS, part)]);
@@ -90,6 +97,9 @@ export async function insertSectionsAndChildren(
   }
   for (const part of chunk(meetingRows, rowsPerChunk(MEETING_COLUMNS.length))) {
     await db.batch([insertStatement(db, "section_meeting", MEETING_COLUMNS, part)]);
+  }
+  for (const part of chunk(attributeRows, rowsPerChunk(ATTRIBUTE_COLUMNS.length))) {
+    await db.batch([insertStatement(db, "section_attribute", ATTRIBUTE_COLUMNS, part)]);
   }
 
   return sectionRows.length;
@@ -112,6 +122,9 @@ export async function deleteSectionsAndChildren(
   for (const part of chunk(crns, 90)) {
     const inList = part.map(() => "?").join(",");
     await db.batch([
+      db
+        .prepare(`DELETE FROM section_attribute WHERE term = ? AND crn IN (${inList})`)
+        .bind(term, ...part),
       db
         .prepare(`DELETE FROM section_faculty WHERE term = ? AND crn IN (${inList})`)
         .bind(term, ...part),
@@ -226,12 +239,16 @@ export async function upsertSections(
   const sectionRows = sections.map((s) => sectionToRow(s, syncedAt));
   const facultyRows = sections.flatMap(sectionToFacultyRows);
   const meetingRows = sections.flatMap(sectionToMeetingRows);
+  const attributeRows = sections.flatMap(sectionToAttributeRows);
 
   // Refresh child rows for just these CRNs (delete-then-insert; not relying on FK
   // cascade, which D1/local differ on). Keep the IN-list under the 100-param cap.
   for (const part of chunk(crns, 90)) {
     const inList = part.map(() => "?").join(",");
     await db.batch([
+      db
+        .prepare(`DELETE FROM section_attribute WHERE term = ? AND crn IN (${inList})`)
+        .bind(term, ...part),
       db
         .prepare(`DELETE FROM section_faculty WHERE term = ? AND crn IN (${inList})`)
         .bind(term, ...part),
@@ -249,6 +266,9 @@ export async function upsertSections(
   }
   for (const part of chunk(meetingRows, rowsPerChunk(MEETING_COLUMNS.length))) {
     await db.batch([insertStatement(db, "section_meeting", MEETING_COLUMNS, part)]);
+  }
+  for (const part of chunk(attributeRows, rowsPerChunk(ATTRIBUTE_COLUMNS.length))) {
+    await db.batch([insertStatement(db, "section_attribute", ATTRIBUTE_COLUMNS, part)]);
   }
 
   return sectionRows.length;

@@ -34,13 +34,19 @@ import { SectionDetails } from "./SectionDetails";
 import { CoverageDialog, type CoverageParams } from "./CoverageDialog";
 import { abbreviateCampus } from "@/lib/campuses";
 import { formatMeetingTime } from "@/lib/meetingTime";
+import { cn } from "@/lib/utils";
+import {
+  attributeFamily,
+  FAMILY_BADGE_CLASS,
+  sortAttributes,
+} from "@/lib/attributes";
 import type { CourseSection, MeetingTime, SearchResultsResponse } from "@/lib/sis/types";
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 // Total columns including the leading expand toggle — kept in sync with the
 // header / skeleton / empty-state colSpans below.
-const COLUMN_COUNT = 13;
+const COLUMN_COUNT = 14;
 
 interface ResultsTableProps {
   results: SearchResultsResponse | null;
@@ -174,6 +180,27 @@ function SectionRow({
           </Tooltip>
         ) : (
           <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {section.sectionAttributes.length === 0 ? (
+          <span className="text-muted-foreground text-sm">—</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {sortAttributes(section.sectionAttributes).map((a, i) => (
+              <Tooltip key={`${a.code}-${i}`}>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className={cn("cursor-help", FAMILY_BADGE_CLASS[attributeFamily(a.code)])}
+                  >
+                    {a.code}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{a.description}</TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
         )}
       </TableCell>
       <TableCell>
@@ -333,6 +360,7 @@ export function ResultsTable({
               <TableHead>Location</TableHead>
               <TableHead className="w-20 text-center">Enrolled</TableHead>
               <TableHead className="w-20 text-center">Waitlist</TableHead>
+              <TableHead>Attributes</TableHead>
               <TableHead className="w-20">Status</TableHead>
             </TableRow>
           </TableHeader>

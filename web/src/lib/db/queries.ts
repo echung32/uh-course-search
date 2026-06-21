@@ -156,6 +156,27 @@ export async function getSubjectFacet(
   return results.map((r) => ({ code: r.code, description: r.description }));
 }
 
+/**
+ * The attribute filter menu for a term — sourced from section_attribute (the real
+ * per-section data), so it always matches what is filterable, includes IDAP, and
+ * covers every backfilled term. Distinct from filter_option (53/100 terms, no
+ * IDAP), which is intentionally NOT used here.
+ */
+export async function getAttributeFacet(
+  db: D1Like,
+  term: string
+): Promise<AutocompleteItem[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT code, MAX(description) AS description
+         FROM section_attribute WHERE term = ?
+         GROUP BY code ORDER BY code ASC`
+    )
+    .bind(term)
+    .all<{ code: string; description: string }>();
+  return results.map((r) => ({ code: r.code, description: r.description }));
+}
+
 /** Serves a server-driven filter dropdown for a term, in Banner's order. */
 export async function getFilterOptions(
   db: D1Like,
@@ -542,6 +563,27 @@ function buildSectionFilter(params: SearchParams): {
     binds.push(params.department);
   }
   if (params.openOnly) clauses.push("cs.open_section = 1");
+
+  // Attribute filter: subquery against section_attribute (term+crn). Works with
+  // or without the course JOIN since it keys on cs.term/cs.crn. Dedupe the codes
+  // so ALL's N matches the distinct selection.
+  const attrCodes = [...new Set((params.attributes ?? []).filter(Boolean))];
+  if (attrCodes.length > 0) {
+    const inList = attrCodes.map(() => "?").join(",");
+    if ((params.attributeMatch ?? "any") === "all") {
+      clauses.push(
+        `(SELECT COUNT(DISTINCT sa.code) FROM section_attribute sa`
+          + ` WHERE sa.term = cs.term AND sa.crn = cs.crn AND sa.code IN (${inList})) = ?`
+      );
+      binds.push(...attrCodes, attrCodes.length);
+    } else {
+      clauses.push(
+        `EXISTS (SELECT 1 FROM section_attribute sa`
+          + ` WHERE sa.term = cs.term AND sa.crn = cs.crn AND sa.code IN (${inList}))`
+      );
+      binds.push(...attrCodes);
+    }
+  }
 
   const from =
     params.college || params.department

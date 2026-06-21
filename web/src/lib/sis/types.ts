@@ -174,6 +174,10 @@ export interface SearchParams {
   /** Department code (from the course catalog); undefined = all. */
   department?: string;
   openOnly?: boolean;
+  /** Filter to sections carrying these attribute codes (e.g. ["WI","ETH"]). */
+  attributes?: string[];
+  /** "any" = section has ≥1 of `attributes`; "all" = has every one. Default "any". */
+  attributeMatch?: "any" | "all";
   pageOffset: number;
   pageMaxSize: number;
   sortColumn?: string;
