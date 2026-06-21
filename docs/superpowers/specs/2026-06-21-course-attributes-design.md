@@ -49,13 +49,16 @@ Only the **filter** needs new query plumbing, because attributes live inside
    populated during ingest and backfilled from existing `raw_json` (mirrors
    `section_faculty`). Chosen over query-time `json_each` (no index → higher D1
    read cost) and a denormalized LIKE column (fragile).
+5. **Backfill:** a dedicated, resumable **chunked CLI command** (`yarn ingest
+   backfill-attributes`), one term per statement — *not* a one-shot insert inside
+   the migration. The migration only creates the empty table + index.
 
 ## 1. Data model & ingest
 
 New child table, mirroring `section_faculty` / `section_meeting`:
 
 ```sql
--- web/migrations/0012_section_attribute.sql
+-- web/migrations/0012_section_attribute.sql  (schema only — no data backfill)
 CREATE TABLE section_attribute (
   term        TEXT NOT NULL,
   crn         TEXT NOT NULL,
@@ -67,21 +70,53 @@ CREATE TABLE section_attribute (
 CREATE INDEX idx_attr_term_code ON section_attribute(term, code);
 ```
 
-**One-time backfill from existing data** (same migration):
+### One-time backfill from existing data — chunked CLI command
 
-```sql
-INSERT OR IGNORE INTO section_attribute (term, crn, code, description)
-SELECT cs.term, cs.crn,
-       json_extract(a.value,'$.code'),
-       json_extract(a.value,'$.description')
-FROM course_section cs, json_each(cs.raw_json,'$.sectionAttributes') a;
+New ingest module **`src/lib/ingest/backfillAttributes.ts`**, exposing
+`backfillAttributes(db, opts)`, wired into `scripts/ingest.ts` as a new
+`backfill-attributes` command:
+
+```
+yarn ingest backfill-attributes [--term 202710] [--force]
 ```
 
-Implementation note: verify this one-shot `INSERT … SELECT … json_each` runs
-within remote-D1 limits against the live row count during implementation. If it
-is too heavy for a single statement, fall back to a chunked CLI backfill
-(iterate terms, insert per-term) instead of doing it inside the migration. The
-local-SQLite path (`node:sqlite`) has no such concern.
+Design (does it "properly", not as a deferred fallback):
+
+- **One statement per term**, executed server-side, so `raw_json` blobs never
+  ship over the D1 REST API and each statement is bounded to a single term
+  (~9k sections max):
+
+  ```sql
+  INSERT OR IGNORE INTO section_attribute (term, crn, code, description)
+  SELECT cs.term, cs.crn,
+         json_extract(a.value,'$.code'),
+         json_extract(a.value,'$.description')
+  FROM course_section cs, json_each(cs.raw_json,'$.sectionAttributes') a
+  WHERE cs.term = ?;
+  ```
+
+  The only bound parameter is `term`; the row volume comes from the server-side
+  `SELECT`, so the remote-D1 100-bound-param cap does not apply. `INSERT OR
+  IGNORE` makes re-runs safe.
+
+- **Term iteration:** enumerate `SELECT code FROM term` and run the statement per
+  term. `--term` restricts to one term.
+
+- **Resumable / idempotent:** by default, skip a term that already has
+  `section_attribute` rows (resume after interruption). `--force` re-runs a term
+  regardless (the `INSERT OR IGNORE` then tops up any missing rows; combine with
+  a per-term `DELETE … WHERE term = ?` first if a clean rebuild is wanted —
+  decided in the plan).
+
+- **Logging:** per-term inserted-row count + a final total, via the same `log`
+  callback the other ingest commands use.
+
+- **Env:** runs against whatever `D1_MODE` selects. Per the known footgun, the
+  operator must `export D1_MODE=remote` after sourcing `.env` to populate the
+  remote DB (the script otherwise writes the local sqlite file).
+
+The local-SQLite backend (`node:sqlite`) runs the identical SQL, so e2e/dev
+exercise the same path.
 
 **Write-path integration** (`src/lib/db/upsert.ts`), all small:
 
@@ -165,6 +200,10 @@ local-SQLite path (`node:sqlite`) has no such concern.
 - **e2e ingest (`web/e2e/ingest.spec.ts`)**: assert a sync populates
   `section_attribute`, and that changing a section's attributes re-writes its
   rows (structural-change path).
+- **Backfill**: a unit/integration check (against local D1) that
+  `backfillAttributes` populates `section_attribute` from pre-seeded
+  `course_section.raw_json` rows, is idempotent on re-run, and respects the
+  per-term resume-skip.
 
 ## Out of scope
 
@@ -177,7 +216,8 @@ local-SQLite path (`node:sqlite`) has no such concern.
 
 | Area | File(s) |
 | --- | --- |
-| Migration | `web/migrations/0012_section_attribute.sql` (new) |
+| Migration | `web/migrations/0012_section_attribute.sql` (new, schema only) |
+| Backfill CLI | `web/src/lib/ingest/backfillAttributes.ts` (new) + `web/scripts/ingest.ts` (new `backfill-attributes` command) |
 | Ingest writes | `web/src/lib/db/upsert.ts` |
 | Mappers (attr rows) | `web/src/lib/db/mappers.ts` (add `sectionToAttributeRows` if not colocated in upsert) |
 | Queries | `web/src/lib/db/queries.ts` |
