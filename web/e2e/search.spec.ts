@@ -306,3 +306,29 @@ test("course number filter narrows the results", async ({ page }) => {
   await runSearch(page, "ICS", "");
   await expect(page.getByText(/of 6 sections/)).toBeVisible();
 });
+
+test("attribute filter (ANY) narrows to sections carrying the tag", async ({ page }) => {
+  // WI is on ICS 111 sec 001 (10001) and ICS 311 sec 001 (10005) → 2 sections.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI");
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+});
+
+test("attribute filter (ANY, multiple) is a union", async ({ page }) => {
+  // WI ∪ DS → 10001, 10005 (WI) + 10003 (DS) = 3 sections.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=DS&attrMatch=any");
+  await expect(page.getByText(/of 3 sections/)).toBeVisible();
+});
+
+test("attribute filter (ALL) requires every selected tag", async ({ page }) => {
+  // WI ∩ ETH → only 10001 has both = 1 section.
+  await page.goto("/?term=202710&subject=ICS&attribute=WI&attribute=ETH&attrMatch=all");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+});
+
+test("attribute filter menu lists the seeded codes", async ({ request }) => {
+  const res = await request.get("/api/filters?term=202710&kind=attribute");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const codes = (body.options as Array<{ code: string }>).map((o) => o.code);
+  expect(codes).toEqual(expect.arrayContaining(["DS", "ETH", "WI"]));
+});

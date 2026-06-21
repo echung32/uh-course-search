@@ -4,6 +4,8 @@ import {
   parseAsString,
   parseAsBoolean,
   parseAsInteger,
+  parseAsNativeArrayOf,
+  parseAsStringLiteral,
 } from "nuqs";
 import { NuqsAdapter } from "nuqs/adapters/react";
 import { SearchForm, type SearchFormValues } from "./SearchForm";
@@ -30,6 +32,8 @@ const searchParsers = {
   college: parseAsString.withDefault(""),
   department: parseAsString.withDefault(""),
   openOnly: parseAsBoolean.withDefault(false),
+  attribute: parseAsNativeArrayOf(parseAsString),
+  attrMatch: parseAsStringLiteral(["any", "all"] as const).withDefault("any"),
   crn: parseAsString.withDefault(""),
   page: parseAsInteger.withDefault(1),
   size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE),
@@ -48,6 +52,8 @@ interface SearchQuery {
   college: string;
   department: string;
   openOnly: boolean;
+  attribute: string[] | null;
+  attrMatch: "any" | "all";
   crn: string;
   page: number;
   size: number;
@@ -104,6 +110,13 @@ function SearchAppInner({ terms }: SearchAppProps) {
     // Empty college/department means no catalog facet filter — omit.
     if (params.college) query.set("college", params.college);
     if (params.department) query.set("department", params.department);
+    // Attribute filter: repeated params for multi-select (e.g. WI + ETH).
+    for (const code of params.attribute ?? []) {
+      query.append("attribute", code);
+    }
+    if ((params.attribute ?? []).length > 0 && params.attrMatch === "all") {
+      query.set("attrMatch", "all");
+    }
 
     try {
       const res = await fetch(`/api/search?${query.toString()}`);
@@ -137,6 +150,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
     q.college,
     q.department,
     q.openOnly,
+    // Serialize the array so React's referential check works for repeated values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (q.attribute ?? []).join(","),
+    q.attrMatch,
     q.crn,
     q.page,
     q.size,

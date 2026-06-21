@@ -6,6 +6,7 @@
  */
 import { getDb } from "@/lib/db/binding";
 import {
+  getAttributeFacet,
   getBackfillCoverageDetail,
   getBackfillCoverageSummary,
   getCatalogFacet,
@@ -111,6 +112,11 @@ export async function fetchFilterOptions(
   // return empty); derive them from the ingested course catalog, campus-scoped.
   if (kind === "college" || kind === "department") {
     return getCatalogFacet(getDb(), term, kind, campusDescription);
+  }
+  // Attributes come from section_attribute (real per-section data), not the
+  // 53-term/IDAP-less filter_option menu.
+  if (kind === "attribute") {
+    return getAttributeFacet(getDb(), term);
   }
   return getFilterOptions(getDb(), term, kind);
 }

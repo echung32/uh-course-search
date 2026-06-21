@@ -89,6 +89,19 @@ SECTIONS[0].faculty = [
 // detail dialog's waitlist line and dedicated Meetings table have data to render.
 // Seats/waitlist live in raw_json (the read path reconstructs CourseSection from
 // it); only the indexed columns are inserted separately below.
+// Attributes for the read-path filter + display tests. Stored both in raw_json
+// (for the table's badge display) and in section_attribute (for the SQL filter).
+SECTIONS[0].sectionAttributes = [
+  { code: "WI", description: "Writing Intensive" },
+  { code: "ETH", description: "Contemporary Ethical Issues" },
+]; // ICS 111 sec 001 — Focus
+SECTIONS[2].sectionAttributes = [
+  { code: "DS", description: "Diversification: Social Sci" },
+]; // ICS 141 — Diversification
+SECTIONS[4].sectionAttributes = [
+  { code: "WI", description: "Writing Intensive" },
+]; // ICS 311 sec 001 — Focus (WI only)
+
 SECTIONS[3].waitCapacity = 5;
 SECTIONS[3].waitCount = 2;
 SECTIONS[3].waitAvailable = 3;
@@ -150,6 +163,7 @@ export default function globalSetup() {
     "section_meeting",
     "section_faculty",
     "section_detail",
+    "section_attribute",
     "course_section",
     "course",
     "filter_option",
@@ -218,6 +232,15 @@ export default function globalSetup() {
     "INSERT OR IGNORE INTO subject (term, code, description) VALUES (?, ?, ?)"
   );
   for (const s of SECTIONS) subjectStmt.run(s.term, s.subject, s.subjectDescription);
+
+  const attrStmt = db.prepare(
+    "INSERT OR IGNORE INTO section_attribute (term, crn, code, description) VALUES (?, ?, ?, ?)"
+  );
+  for (const s of SECTIONS) {
+    for (const a of s.sectionAttributes) {
+      attrStmt.run(s.term, s.courseReferenceNumber, a.code, a.description);
+    }
+  }
 
   // Course catalog rows (what a details sync would produce). College/department
   // are per (campus, course); ICS 311 sits in a different college so the College
