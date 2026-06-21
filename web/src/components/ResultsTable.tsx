@@ -46,7 +46,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 // Total columns including the leading expand toggle — kept in sync with the
 // header / skeleton / empty-state colSpans below.
-const COLUMN_COUNT = 14;
+const COLUMN_COUNT = 13;
 
 interface ResultsTableProps {
   results: SearchResultsResponse | null;
@@ -79,7 +79,14 @@ function SectionRow({
       onClick={() => setExpanded((v) => !v)}
       aria-expanded={expanded}
     >
-      <TableCell className="w-8">
+      <TableCell
+        className={cn(
+          "w-8 border-l-4",
+          section.openSection ? "border-l-green-500" : "border-l-muted-foreground/30",
+        )}
+        title={section.openSection ? "Open" : "Closed"}
+      >
+        <span className="sr-only">{section.openSection ? "Open" : "Closed"}</span>
         <ChevronDown
           className={`h-4 w-4 text-muted-foreground transition-transform ${
             expanded ? "" : "-rotate-90"
@@ -203,17 +210,16 @@ function SectionRow({
           </div>
         )}
       </TableCell>
-      <TableCell>
-        {section.openSection ? (
-          <Badge variant="success">Open</Badge>
-        ) : (
-          <Badge variant="destructive">Closed</Badge>
-        )}
-      </TableCell>
     </TableRow>
     {expanded && (
       <TableRow className="bg-muted/30 hover:bg-muted/30">
-        <TableCell colSpan={COLUMN_COUNT} className="px-6 pt-0 align-top">
+        <TableCell
+          colSpan={COLUMN_COUNT}
+          className={cn(
+            "px-6 pt-0 align-top border-l-4",
+            section.openSection ? "border-l-green-500" : "border-l-muted-foreground/30",
+          )}
+        >
           <SectionDetails section={section} onSelectCrn={onSelectCrn} />
         </TableCell>
       </TableRow>
@@ -361,7 +367,6 @@ export function ResultsTable({
               <TableHead className="w-20 text-center">Enrolled</TableHead>
               <TableHead className="w-20 text-center">Waitlist</TableHead>
               <TableHead>Attributes</TableHead>
-              <TableHead className="w-20">Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
