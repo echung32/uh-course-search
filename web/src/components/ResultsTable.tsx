@@ -35,6 +35,7 @@ import { CoverageDialog, type CoverageParams } from "./CoverageDialog";
 import { abbreviateCampus } from "@/lib/campuses";
 import { formatMeetingTime } from "@/lib/meetingTime";
 import { cn } from "@/lib/utils";
+import { sectionStatus, STATUS_RAIL, STATUS_LABEL } from "@/lib/sectionStatus";
 import {
   attributeFamily,
   FAMILY_BADGE_CLASS,
@@ -69,6 +70,7 @@ function SectionRow({
   onSelectCrn: (crn: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const status = sectionStatus(section);
   const primaryFaculty = section.faculty.find((f) => f.primaryIndicator) ?? section.faculty[0];
   const meetings = section.meetingsFaculty.map((mf) => mf.meetingTime).filter((mt): mt is MeetingTime => mt != null);
 
@@ -80,13 +82,10 @@ function SectionRow({
       aria-expanded={expanded}
     >
       <TableCell
-        className={cn(
-          "w-8 border-l-4",
-          section.openSection ? "border-l-green-500" : "border-l-muted-foreground/30",
-        )}
-        title={section.openSection ? "Open" : "Closed"}
+        className={cn("w-8 border-l-4", STATUS_RAIL[status])}
+        title={STATUS_LABEL[status]}
       >
-        <span className="sr-only">{section.openSection ? "Open" : "Closed"}</span>
+        <span className="sr-only">{STATUS_LABEL[status]}</span>
         <ChevronDown
           className={`h-4 w-4 text-muted-foreground transition-transform ${
             expanded ? "" : "-rotate-90"
@@ -215,10 +214,7 @@ function SectionRow({
       <TableRow className="bg-muted/30 hover:bg-muted/30">
         <TableCell
           colSpan={COLUMN_COUNT}
-          className={cn(
-            "px-6 pt-0 align-top border-l-4",
-            section.openSection ? "border-l-green-500" : "border-l-muted-foreground/30",
-          )}
+          className={cn("px-6 pt-0 align-top border-l-4", STATUS_RAIL[status])}
         >
           <SectionDetails section={section} onSelectCrn={onSelectCrn} />
         </TableCell>
