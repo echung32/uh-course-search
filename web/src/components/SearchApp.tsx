@@ -13,12 +13,12 @@ import { SectionDialog } from "./SectionDialog";
 import type { CoverageParams } from "./CoverageDialog";
 import { ALL_CAMPUSES, DEFAULT_CAMPUS } from "@/lib/campuses";
 import type { SearchResultsResponse, TermListItem } from "@/lib/sis/types";
+import { DEFAULT_PAGE_SIZE } from "@/lib/pageSize";
+import { pageSizePref } from "@/lib/devicePrefs";
 
 interface SearchAppProps {
   terms: TermListItem[];
 }
-
-const DEFAULT_PAGE_SIZE = 20;
 
 // The executed search lives entirely in the URL (shareable). Default values are
 // omitted from the querystring so links stay clean. `page` is 1-based for
@@ -67,9 +67,17 @@ function SearchAppInner({ terms }: SearchAppProps) {
   // then auto-runs on mount, populating results without a manual Search click.
   // nuqs omits a value equal to its default, so the URL still stays clean.
   const defaultTerm = pickDefaultTerm(terms);
+  // Saved device preference seeds the size default; an explicit ?size in the
+  // URL still wins (nuqs only omits a value equal to its default). Lazy + stable
+  // so it's read once on the client; the server reads DEFAULT_PAGE_SIZE.
+  const [savedSize] = useState(() => pageSizePref.load());
   const parsers = useMemo(
-    () => ({ ...searchParsers, term: parseAsString.withDefault(defaultTerm) }),
-    [defaultTerm],
+    () => ({
+      ...searchParsers,
+      term: parseAsString.withDefault(defaultTerm),
+      size: parseAsInteger.withDefault(savedSize),
+    }),
+    [defaultTerm, savedSize],
   );
   // `push` so each committed search / page change is its own history entry —
   // the browser Back/Forward buttons then step through prior searches.
@@ -190,8 +198,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
     setQ({ page: Math.floor(pageOffset / q.size) + 1 });
   }
 
-  // Changing rows-per-page resets to the first page.
+  // Changing rows-per-page resets to the first page and saves the choice as the
+  // device default for future visits.
   function handlePageSizeChange(pageMaxSize: number) {
+    pageSizePref.save(pageMaxSize);
     setQ({ size: pageMaxSize, page: 1 });
   }
 
