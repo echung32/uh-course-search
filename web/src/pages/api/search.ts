@@ -13,6 +13,7 @@ import { ensureSearchPage } from "@/lib/ingest/pageCache";
 import { ensureSectionByCrn } from "@/lib/ingest/crnLazy";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import { logDb } from "@/lib/log";
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "@/lib/pageSize";
 import type { CourseSection, SearchParams, SearchResultsResponse } from "@/lib/sis/types";
 
 /** Wraps a CRN lookup as a single-(or zero-)row search response for the table. */
@@ -66,8 +67,8 @@ async function handleSearch(
 
   const pageOffset = parseInt(url.searchParams.get("pageOffset") ?? "0", 10);
   const pageMaxSize = Math.min(
-    parseInt(url.searchParams.get("pageMaxSize") ?? "20", 10),
-    100
+    parseInt(url.searchParams.get("pageMaxSize") ?? String(DEFAULT_PAGE_SIZE), 10),
+    MAX_PAGE_SIZE
   );
 
   // Repeated ?attribute=WI&attribute=ETH; clamp to ≤20 codes (param-cap safety).
@@ -88,7 +89,7 @@ async function handleSearch(
     openOnly: url.searchParams.get("openOnly") === "true",
     attributes,
     pageOffset: isNaN(pageOffset) ? 0 : pageOffset,
-    pageMaxSize: isNaN(pageMaxSize) ? 10 : pageMaxSize,
+    pageMaxSize: isNaN(pageMaxSize) ? DEFAULT_PAGE_SIZE : pageMaxSize,
     sortColumn: url.searchParams.get("sortColumn") ?? "subjectDescription",
     sortDirection: url.searchParams.get("sortDirection") ?? "asc",
   };

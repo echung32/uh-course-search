@@ -459,3 +459,15 @@ test("the attributes menu surfaces selected items on top when reopened", async (
   await page.locator("#attributes").click();
   await expect(page.getByRole("option").first()).toContainText("WI");
 });
+
+test("rows-per-page offers 250 and applies it to the search", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS");
+  // Wait for results so the rows-per-page Select is mounted.
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+
+  await page.getByLabel("Rows per page").click();
+  await page.getByRole("option", { name: "250", exact: true }).click();
+
+  // The choice is reflected in the shareable URL (250 ≠ the 25 default).
+  await expect(page).toHaveURL(/[?&]size=250\b/);
+});

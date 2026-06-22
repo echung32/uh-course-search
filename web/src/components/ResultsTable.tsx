@@ -41,9 +41,8 @@ import {
   FAMILY_BADGE_CLASS,
   sortAttributes,
 } from "@/lib/attributes";
+import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/pageSize";
 import type { CourseSection, MeetingTime, SearchResultsResponse } from "@/lib/sis/types";
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 // Total columns including the leading expand toggle — kept in sync with the
 // header / skeleton / empty-state colSpans below.
@@ -253,7 +252,7 @@ export function ResultsTable({
 
   const totalCount = results?.totalCount ?? 0;
   const pageOffset = results?.pageOffset ?? 0;
-  const pageMaxSize = results?.pageMaxSize ?? 20;
+  const pageMaxSize = results?.pageMaxSize ?? DEFAULT_PAGE_SIZE;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageMaxSize));
   const currentPage = Math.floor(pageOffset / pageMaxSize) + 1;
   const lastPageOffset = (totalPages - 1) * pageMaxSize;
