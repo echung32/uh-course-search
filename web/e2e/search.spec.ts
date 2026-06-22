@@ -33,6 +33,10 @@ async function pickCombobox(page: Page, triggerId: string, query: string) {
   await page.locator(`#${triggerId}`).click();
   const input = page.getByPlaceholder(COMBO_PLACEHOLDER[triggerId]);
   await input.fill(query);
+  // Options load asynchronously (subject/catalog fetches), so wait for the typed
+  // option to render before committing — pressing Enter against a not-yet-
+  // populated list selects nothing, silently dropping the filter.
+  await page.getByRole("option").filter({ hasText: query }).first().waitFor();
   await input.press("Enter");
 }
 
@@ -454,4 +458,49 @@ test("the attributes menu surfaces selected items on top when reopened", async (
   // Reopen — the selected WI should now sort to the top of the list.
   await page.locator("#attributes").click();
   await expect(page.getByRole("option").first()).toContainText("WI");
+});
+
+test("rows-per-page offers 250 and applies it to the search", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS");
+  // Wait for results so the rows-per-page Select is mounted.
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+
+  await page.getByLabel("Rows per page").click();
+  await page.getByRole("option", { name: "250", exact: true }).click();
+
+  // The choice is reflected in the shareable URL (250 ≠ the 25 default).
+  await expect(page).toHaveURL(/[?&]size=250\b/);
+});
+
+test("rows-per-page persists on device across a reload", async ({ page }) => {
+  await page.goto("/?term=202710&subject=ICS");
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+
+  // Pick 100; it lands in the URL (100 ≠ the 25 default-at-load).
+  await page.getByLabel("Rows per page").click();
+  await page.getByRole("option", { name: "100", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]size=100\b/);
+
+  // Reload the BARE site: the saved pref is now the default, so the size is
+  // applied but omitted from the URL, and the selector shows 100.
+  await page.goto("/?term=202710&subject=ICS");
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  await expect(page).not.toHaveURL(/[?&]size=/);
+  await expect(page.getByLabel("Rows per page")).toContainText("100");
+});
+
+test("an explicit ?size in the URL overrides the saved preference", async ({ page }) => {
+  // Save 100 as the device preference first.
+  await page.goto("/?term=202710&subject=ICS");
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  await page.getByLabel("Rows per page").click();
+  await page.getByRole("option", { name: "100", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]size=100\b/);
+
+  // A link with an explicit size wins for whoever opens it.
+  await page.goto("/?term=202710&subject=ICS&size=50");
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  await expect(page.getByLabel("Rows per page")).toContainText("50");
+  // 50 ≠ the saved pref (100), so nuqs keeps it in the URL rather than omitting it.
+  await expect(page).toHaveURL(/[?&]size=50\b/);
 });
