@@ -133,6 +133,34 @@ test("college filter narrows results to the selected academic college", async ({
   await expect(page.getByRole("cell", { name: "ICS 311" })).toHaveCount(2);
 });
 
+test("open sections render a green status rail, not the default border gray", async ({
+  page,
+}) => {
+  // The seeded ICS sections are all open, so their leading rail cell carries
+  // `border-l-green-500`. Regression guard: an unlayered `* { border-color }`
+  // reset in globals.css overrode every `border-*` color utility (Tailwind v4
+  // cascade-layer trap), so the rail computed to the `--border` gray instead of
+  // green — open and closed looked identical.
+  await runSearch(page, "ICS", "");
+  // Wait for real results (not the loading skeleton, whose cells carry no rail).
+  await expect(page.getByRole("cell", { name: "ICS 111" }).first()).toBeVisible();
+  const railCell = page.locator("tbody tr td.border-l-green-500").first();
+  await expect(railCell).toBeVisible();
+
+  const { actual, expectedGreen } = await railCell.evaluate((cell) => {
+    // Resolve green-500 through the same getComputedStyle normalization so the
+    // comparison is robust to oklch/rgb serialization differences.
+    const probe = document.createElement("div");
+    probe.style.borderLeftColor = "var(--color-green-500)";
+    document.body.appendChild(probe);
+    const expectedGreen = getComputedStyle(probe).borderLeftColor;
+    probe.remove();
+    return { actual: getComputedStyle(cell).borderLeftColor, expectedGreen };
+  });
+
+  expect(actual).toBe(expectedGreen);
+});
+
 test("College/Department only claim 'not backfilled' when the term truly isn't synced", async ({
   page,
 }) => {
