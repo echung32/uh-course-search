@@ -115,6 +115,36 @@ function SearchAppInner({ terms }: SearchAppProps) {
   // the latest request is allowed to touch state.
   const requestSeq = useRef(0);
 
+  // Client-side cache of fetched result pages, keyed by the exact /api/search
+  // query string (which encodes every filter + page). Makes Next/Prev instant
+  // and warms the edge cache as a side effect. Populated only for backfilled
+  // terms (see runSearch). `cacheBaseKey` is the current filter set (everything
+  // but the page) — when it changes we drop the cache so a stale filter set's
+  // pages can never be served.
+  const pageCache = useRef<Map<string, SearchResultsResponse>>(new Map());
+  const cacheBaseKey = useRef<string>("");
+
+  // Best-effort warm of the next page into the client cache. Only ever writes to
+  // the cache Map — never results/isLoading/error/requestSeq — so it cannot
+  // affect what the user sees. The caller guarantees the term is backfilled.
+  async function prefetchNextPage(
+    params: SearchQuery,
+    current: SearchResultsResponse,
+  ) {
+    // No next page to warm.
+    if (current.pageOffset + current.pageMaxSize >= current.totalCount) return;
+    const qs = buildSearchQuery({ ...params, page: params.page + 1 });
+    if (pageCache.current.has(qs)) return; // already warm
+    try {
+      const res = await fetch(`/api/search?${qs}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as SearchResultsResponse;
+      pageCache.current.set(qs, data);
+    } catch {
+      // Best-effort warming — ignore failures.
+    }
+  }
+
   async function runSearch(params: SearchQuery) {
     const seq = ++requestSeq.current;
     const stale = () => seq !== requestSeq.current;
@@ -149,6 +179,31 @@ function SearchAppInner({ terms }: SearchAppProps) {
     }
 
     const qs = buildSearchQuery(params);
+    const isBackfilled =
+      terms.find((t) => t.code === params.term)?.backfilled ?? false;
+
+    if (isBackfilled) {
+      // Drop the cache whenever the filter set (everything but the page)
+      // changes, so a prior filter set's pages can't be served as new results.
+      const baseParams = new URLSearchParams(qs);
+      baseParams.delete("pageOffset");
+      const base = baseParams.toString();
+      if (base !== cacheBaseKey.current) {
+        pageCache.current.clear();
+        cacheBaseKey.current = base;
+      }
+
+      // Cache hit → render instantly, no network. Synchronous, so the request
+      // seq can't have advanced; no stale() guard needed before setting state.
+      const cached = pageCache.current.get(qs);
+      if (cached) {
+        setResults(cached);
+        setTookMs(performance.now() - startedAt);
+        setIsLoading(false);
+        void prefetchNextPage(params, cached);
+        return;
+      }
+    }
 
     try {
       const res = await fetch(`/api/search?${qs}`);
@@ -159,8 +214,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
       }
       const data: SearchResultsResponse = await res.json();
       if (stale()) return;
+      if (isBackfilled) pageCache.current.set(qs, data);
       setResults(data);
       setTookMs(performance.now() - startedAt);
+      if (isBackfilled) void prefetchNextPage(params, data);
     } catch (err) {
       if (stale()) return;
       setError(err instanceof Error ? err.message : "Search failed");

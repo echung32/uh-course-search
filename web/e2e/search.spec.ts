@@ -504,3 +504,71 @@ test("an explicit ?size in the URL overrides the saved preference", async ({ pag
   // 50 ≠ the saved pref (100), so nuqs keeps it in the URL rather than omitting it.
   await expect(page).toHaveURL(/[?&]size=50\b/);
 });
+
+// --- Next-page prefetch (client-side result cache) -------------------------
+// The read-path fixture term (202710) is backfilled, so prefetch is active.
+// We intercept /api/search with a synthetic 60-section response so the result
+// spans multiple pages (the fixture has too few rows to paginate) and count
+// requests per pageOffset — the backfilled flag comes from the terms prop, so
+// the body can be fully synthetic.
+function stubSearchPaged(page: import("@playwright/test").Page, pathMode: string) {
+  const offsets: number[] = [];
+  return page
+    .route("**/api/search?*", async (route) => {
+      const url = new URL(route.request().url());
+      // CRN-mode and any non-paged request: let the real server handle it.
+      if (!url.searchParams.has("pageOffset")) return route.continue();
+      offsets.push(Number(url.searchParams.get("pageOffset")));
+      await route.fulfill({
+        json: {
+          success: true,
+          totalCount: 60,
+          data: [],
+          pageOffset: Number(url.searchParams.get("pageOffset")),
+          pageMaxSize: Number(url.searchParams.get("pageMaxSize")),
+          sectionsFetchedCount: 0,
+          pathMode,
+        },
+      });
+    })
+    .then(() => offsets);
+}
+
+test("prefetches the next page and serves Next from the client cache", async ({
+  page,
+}) => {
+  const offsets = await stubSearchPaged(page, "db");
+  // Re-navigate with the route active so the mount auto-search is intercepted.
+  await page.goto("/");
+  await expect(page.getByText(/of 60 sections/)).toBeVisible();
+
+  // The next page (offset 25) is prefetched in the background after page 1.
+  await expect.poll(() => offsets.filter((o) => o === 25).length).toBe(1);
+
+  // Navigating Next is served from the client cache: NO new request for offset 25.
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect(page.getByText(/Showing 26.50 of 60 sections/)).toBeVisible();
+  expect(offsets.filter((o) => o === 25).length).toBe(1);
+});
+
+test("does not prefetch the next page for a dynamic (un-backfilled) term", async ({
+  page,
+}) => {
+  const offsets = await stubSearchPaged(page, "page-cache");
+  await page.goto("/");
+  // The initial auto-search is for the default (backfilled) term, so let any
+  // prefetch it triggers settle before we switch to the dynamic term, to avoid
+  // counting the backfilled term's prefetch as the dynamic term's.
+  await expect(page.getByText(/of 60 sections/)).toBeVisible();
+  await expect.poll(() => offsets.filter((o) => o === 25).length).toBe(1);
+  // Snapshot the count of 25s seen so far (from the backfilled initial search).
+  const prefetchesBefore = offsets.filter((o) => o === 25).length;
+
+  // Summer 2026 (202740) is left dynamic in the fixture (last_synced_at NULL).
+  await pickCombobox(page, "term", "Summer 2026");
+  await expect(page.getByText(/of 60 sections/)).toBeVisible();
+
+  // Give any (incorrect) prefetch a chance to fire, then assert none new did.
+  await page.waitForTimeout(500);
+  expect(offsets.filter((o) => o === 25).length).toBe(prefetchesBefore);
+});
