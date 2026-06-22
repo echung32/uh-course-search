@@ -501,4 +501,6 @@ test("an explicit ?size in the URL overrides the saved preference", async ({ pag
   await page.goto("/?term=202710&subject=ICS&size=50");
   await expect(page.getByText(/of \d+ sections/)).toBeVisible();
   await expect(page.getByLabel("Rows per page")).toContainText("50");
+  // 50 ≠ the saved pref (100), so nuqs keeps it in the URL rather than omitting it.
+  await expect(page).toHaveURL(/[?&]size=50\b/);
 });
