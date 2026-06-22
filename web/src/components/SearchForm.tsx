@@ -42,7 +42,7 @@ interface SearchFormProps {
  * Apprenticeship / View-Only variants so the default lands on the main semester
  * (e.g. "Fall 2026", not "Fall 2026 Extension"). Terms arrive most-recent-first.
  */
-function pickDefaultTerm(terms: AutocompleteItem[]): string {
+export function pickDefaultTerm(terms: AutocompleteItem[]): string {
   const isRegular = (desc: string) =>
     !/extension|apprenticeship|\(view only\)/i.test(desc);
   const regular = terms.find((t) => isRegular(t.description));
@@ -386,7 +386,10 @@ export function SearchForm({
           )}
         </div>
 
-        <div className="flex items-center space-x-2 lg:pt-8">
+      </div>
+
+      <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center space-x-2">
           <Switch
             id="openOnly"
             checked={openOnly}
@@ -396,12 +399,15 @@ export function SearchForm({
           <Label htmlFor="openOnly">Open sections only</Label>
         </div>
 
-        <div className="flex flex-col justify-end">
-          <Button type="submit" disabled={isLoading || !term} className="w-full">
-            <Search className="h-4 w-4" />
-            {isLoading ? "Searching…" : "Search"}
-          </Button>
-        </div>
+        <Button
+          type="submit"
+          size="lg"
+          disabled={isLoading || !term}
+          className="w-full sm:w-auto sm:min-w-48"
+        >
+          <Search className="h-4 w-4" />
+          {isLoading ? "Searching…" : "Search"}
+        </Button>
       </div>
     </form>
   );

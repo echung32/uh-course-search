@@ -33,6 +33,10 @@ async function pickCombobox(page: Page, triggerId: string, query: string) {
   await page.locator(`#${triggerId}`).click();
   const input = page.getByPlaceholder(COMBO_PLACEHOLDER[triggerId]);
   await input.fill(query);
+  // Options load asynchronously (subject/catalog fetches), so wait for the typed
+  // option to render before committing — pressing Enter against a not-yet-
+  // populated list selects nothing, silently dropping the filter.
+  await page.getByRole("option").filter({ hasText: query }).first().waitFor();
   await input.press("Enter");
 }
 

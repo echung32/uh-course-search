@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useQueryStates,
   parseAsString,
@@ -7,7 +7,7 @@ import {
   parseAsNativeArrayOf,
 } from "nuqs";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import { SearchForm, type SearchFormValues } from "./SearchForm";
+import { SearchForm, pickDefaultTerm, type SearchFormValues } from "./SearchForm";
 import { ResultsTable } from "./ResultsTable";
 import { SectionDialog } from "./SectionDialog";
 import type { CoverageParams } from "./CoverageDialog";
@@ -62,11 +62,28 @@ function SearchAppInner({ terms }: SearchAppProps) {
   const [error, setError] = useState<string | null>(null);
   // Wall-clock duration (ms) of the most recent search/page fetch, client-side.
   const [tookMs, setTookMs] = useState<number | null>(null);
+  // The term defaults to the most recent regular term (not ""), so a fresh visit
+  // with no URL params arrives with a real term in `q` — the search effect below
+  // then auto-runs on mount, populating results without a manual Search click.
+  // nuqs omits a value equal to its default, so the URL still stays clean.
+  const defaultTerm = pickDefaultTerm(terms);
+  const parsers = useMemo(
+    () => ({ ...searchParsers, term: parseAsString.withDefault(defaultTerm) }),
+    [defaultTerm],
+  );
   // `push` so each committed search / page change is its own history entry —
   // the browser Back/Forward buttons then step through prior searches.
-  const [q, setQ] = useQueryStates(searchParsers, { history: "push" });
+  const [q, setQ] = useQueryStates(parsers, { history: "push" });
+
+  // Monotonic id so out-of-order responses can't clobber a newer search: the
+  // mount-time auto-search and a quick follow-up search can be in flight at once
+  // (the all-subjects auto-search is slow and could otherwise land last). Only
+  // the latest request is allowed to touch state.
+  const requestSeq = useRef(0);
 
   async function runSearch(params: SearchQuery) {
+    const seq = ++requestSeq.current;
+    const stale = () => seq !== requestSeq.current;
     setIsLoading(true);
     setError(null);
     const startedAt = performance.now();
@@ -77,18 +94,22 @@ function SearchAppInner({ terms }: SearchAppProps) {
       const crnQuery = new URLSearchParams({ term: params.term, crn: params.crn });
       try {
         const res = await fetch(`/api/search?${crnQuery.toString()}`);
+        if (stale()) return;
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Unknown error" }));
           throw new Error(err.error ?? "Search failed");
         }
-        setResults((await res.json()) as SearchResultsResponse);
+        const data = (await res.json()) as SearchResultsResponse;
+        if (stale()) return;
+        setResults(data);
         setTookMs(performance.now() - startedAt);
       } catch (err) {
+        if (stale()) return;
         setError(err instanceof Error ? err.message : "Search failed");
         setResults(null);
         setTookMs(null);
       } finally {
-        setIsLoading(false);
+        if (!stale()) setIsLoading(false);
       }
       return;
     }
@@ -115,19 +136,22 @@ function SearchAppInner({ terms }: SearchAppProps) {
 
     try {
       const res = await fetch(`/api/search?${query.toString()}`);
+      if (stale()) return;
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
         throw new Error(err.error ?? "Search failed");
       }
       const data: SearchResultsResponse = await res.json();
+      if (stale()) return;
       setResults(data);
       setTookMs(performance.now() - startedAt);
     } catch (err) {
+      if (stale()) return;
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
       setTookMs(null);
     } finally {
-      setIsLoading(false);
+      if (!stale()) setIsLoading(false);
     }
   }
 
