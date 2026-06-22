@@ -56,6 +56,32 @@ interface SearchQuery {
   size: number;
 }
 
+// Builds the exact /api/search query string for a non-CRN search. The single
+// source of truth for the request URL — runSearch and the next-page prefetch
+// both call it, so a cached page's key always matches the URL that produced it.
+function buildSearchQuery(params: SearchQuery): string {
+  const query = new URLSearchParams({
+    term: params.term,
+    pageOffset: String((params.page - 1) * params.size),
+    pageMaxSize: String(params.size),
+    openOnly: String(params.openOnly),
+  });
+  if (params.subject) query.set("subject", params.subject);
+  if (params.courseNumber) query.set("courseNumber", params.courseNumber);
+  // ALL_CAMPUSES (or empty) means "don't filter by campus" — omit the param.
+  if (params.campus && params.campus !== ALL_CAMPUSES)
+    query.set("campus", params.campus);
+  // Empty college/department means no catalog facet filter — omit.
+  if (params.college) query.set("college", params.college);
+  if (params.department) query.set("department", params.department);
+  // Attribute filter: repeated params for multi-select (e.g. WI + ETH). A
+  // section must carry every selected attribute (match-all is the only mode).
+  for (const code of params.attribute ?? []) {
+    query.append("attribute", code);
+  }
+  return query.toString();
+}
+
 function SearchAppInner({ terms }: SearchAppProps) {
   const [results, setResults] = useState<SearchResultsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -122,28 +148,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
       return;
     }
 
-    const query = new URLSearchParams({
-      term: params.term,
-      pageOffset: String((params.page - 1) * params.size),
-      pageMaxSize: String(params.size),
-      openOnly: String(params.openOnly),
-    });
-    if (params.subject) query.set("subject", params.subject);
-    if (params.courseNumber) query.set("courseNumber", params.courseNumber);
-    // ALL_CAMPUSES (or empty) means "don't filter by campus" — omit the param.
-    if (params.campus && params.campus !== ALL_CAMPUSES)
-      query.set("campus", params.campus);
-    // Empty college/department means no catalog facet filter — omit.
-    if (params.college) query.set("college", params.college);
-    if (params.department) query.set("department", params.department);
-    // Attribute filter: repeated params for multi-select (e.g. WI + ETH). A
-    // section must carry every selected attribute (match-all is the only mode).
-    for (const code of params.attribute ?? []) {
-      query.append("attribute", code);
-    }
+    const qs = buildSearchQuery(params);
 
     try {
-      const res = await fetch(`/api/search?${query.toString()}`);
+      const res = await fetch(`/api/search?${qs}`);
       if (stale()) return;
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
