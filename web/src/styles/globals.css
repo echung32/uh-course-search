@@ -73,11 +73,21 @@
   --color-ring: hsl(var(--ring));
 }
 
-* {
-  border-color: hsl(var(--border));
-}
+/*
+ * These base resets MUST live in `@layer base`. Tailwind v4 puts utilities in
+ * `@layer utilities`, and unlayered rules beat *any* layered rule regardless of
+ * specificity — so an unlayered `* { border-color }` silently overrides every
+ * `border-*-<color>` utility (e.g. the open/closed status rail's
+ * `border-l-green-500`). Layering it keeps the default border color while
+ * letting explicit border-color utilities win.
+ */
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
 
-body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
 }
