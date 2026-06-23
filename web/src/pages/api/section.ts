@@ -7,10 +7,7 @@
  * lib/ingest/sectionLazy). 404 only if the section itself doesn't exist in D1.
  */
 import type { APIRoute } from "astro";
-import { getDb } from "@/lib/db/binding";
-import { fetchSectionDetail } from "@/lib/search";
-import { ensureSectionDetail } from "@/lib/ingest/sectionLazy";
-import { logDb } from "@/lib/log";
+import { runSectionDetail } from "@/lib/api/section";
 
 function bad(message: string, status = 400): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -27,10 +24,7 @@ export const GET: APIRoute = async ({ request }) => {
   if (!term || !crn) return bad("term and crn are required");
 
   try {
-    // D1 first; on a cold section, fetch live + store once (lazy cache-on-miss).
-    const stored = await fetchSectionDetail(term, crn);
-    if (stored) logDb(`section detail ${term}:${crn} (cached)`);
-    const detail = stored ?? (await ensureSectionDetail(getDb(), term, crn));
+    const detail = await runSectionDetail(term, crn);
     if (!detail) return bad("section detail not found", 404);
     return new Response(JSON.stringify(detail), {
       status: 200,

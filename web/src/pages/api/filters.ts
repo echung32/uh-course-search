@@ -5,9 +5,8 @@
  * D1's filter_option table. Returns [{ code, description }].
  */
 import type { APIRoute } from "astro";
-import { getDb } from "@/lib/db/binding";
-import { fetchFilterOptions, fetchTermSyncMeta } from "@/lib/search";
-import { ensureTermSubjects } from "@/lib/ingest/dynamicSync";
+import { fetchTermSyncMeta } from "@/lib/search";
+import { runFilterOptions } from "@/lib/api/filters";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import { FILTER_KINDS, type FilterKind } from "@/lib/db/queries";
 
@@ -24,12 +23,7 @@ async function handleFilters(
   campus: string | undefined
 ): Promise<Response> {
   try {
-    // For a not-yet-backfilled term the subject menu would be empty — lazily
-    // enumerate its subjects from Banner so the dropdown is usable (a no-op for
-    // backfilled terms / when DYNAMIC_SYNC=0).
-    if (kind === "subject") await ensureTermSubjects(getDb(), term);
-
-    const options = await fetchFilterOptions(term, kind, campus);
+    const options = await runFilterOptions(term, kind, campus);
     return new Response(JSON.stringify({ kind, options }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

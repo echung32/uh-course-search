@@ -1,18 +1,7 @@
 import type { APIRoute } from "astro";
-import { getDb } from "@/lib/db/binding";
-import {
-  fetchBackfillCoverageSummary,
-  fetchCoverageSummary,
-  fetchSearchPage,
-  fetchSearchResults,
-  fetchSectionByCrn,
-  fetchTermSyncMeta,
-} from "@/lib/search";
-import type { TermSyncMeta } from "@/lib/db/queries";
-import { ensureSearchPage } from "@/lib/ingest/pageCache";
-import { ensureSectionByCrn } from "@/lib/ingest/crnLazy";
+import { fetchTermSyncMeta } from "@/lib/search";
+import { runCrnLookup, runSearch } from "@/lib/api/search";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
-import { logDb } from "@/lib/log";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "@/lib/pageSize";
 import type { CourseSection, SearchParams, SearchResultsResponse } from "@/lib/sis/types";
 
@@ -30,38 +19,28 @@ function crnResponse(section: CourseSection | null): SearchResultsResponse {
   };
 }
 
-/** The uncached search handler — every D1/Banner touch happens in here. */
-async function handleSearch(
-  request: Request,
-  term: string,
-  meta: TermSyncMeta | null
-): Promise<Response> {
+/** The uncached search handler — every D1/Banner touch happens in the service. */
+async function handleSearch(request: Request, term: string): Promise<Response> {
   const url = new URL(request.url);
-  // Subject is optional — empty means "all subjects" (search across everything).
   const subject = (url.searchParams.get("subject") ?? "").trim().toUpperCase();
 
-  // CRN search is a distinct mode: a CRN identifies exactly one section within a
-  // term (it's unique only per-term — see docs), so it ignores every other filter
-  // and returns that single section. Serve from D1; for a dynamic (un-backfilled)
-  // term, fall back to a live Banner fetch on a miss (ensureSectionByCrn).
+  // CRN mode: a CRN identifies exactly one section within a term, so it ignores
+  // every other filter and returns that single section (live fallback on a
+  // dynamic-term miss happens inside runCrnLookup).
   const crn = (url.searchParams.get("crn") ?? "").trim();
   if (crn) {
     try {
-      let section = await fetchSectionByCrn(term, crn);
-      if (!section && (await ensureSectionByCrn(getDb(), term, crn))) {
-        section = await fetchSectionByCrn(term, crn);
-      }
-      logDb(`crn ${term}/${crn} → ${section ? "1" : "0"}`);
+      const section = await runCrnLookup(term, crn);
       return new Response(JSON.stringify(crnResponse(section)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (err) {
       console.error("CRN search failed:", err);
-      return new Response(
-        JSON.stringify({ error: "Failed to fetch CRN" }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Failed to fetch CRN" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   }
 
@@ -70,9 +49,6 @@ async function handleSearch(
     parseInt(url.searchParams.get("pageMaxSize") ?? String(DEFAULT_PAGE_SIZE), 10),
     MAX_PAGE_SIZE
   );
-
-  // Repeated ?attribute=WI&attribute=ETH; clamp to ≤20 codes (param-cap safety).
-  // A section must carry every selected attribute (match-all, the only mode).
   const attributes = url.searchParams
     .getAll("attribute")
     .map((s) => s.trim().toUpperCase())
@@ -95,37 +71,17 @@ async function handleSearch(
   };
 
   try {
-    // Dynamic (not-yet-backfilled) terms serve from the demand-driven page cache:
-    // ensureSearchPage fills the viewed window(s) from Banner on a miss, then we
-    // assemble the page from D1. It returns false for backfilled/unknown terms (or
-    // when DYNAMIC_SYNC is off), in which case we serve from the SQL read path.
-    const viaPageCache = await ensureSearchPage(getDb(), params);
-    const results = viaPageCache
-      ? await fetchSearchPage(params)
-      : await fetchSearchResults(params);
-    // Attach a coverage summary: a dynamic term reports partial page-cache
-    // coverage; a backfilled term reports a (cheap) data-freshness summary so the
-    // UI can offer the per-window age grid. Unknown terms get nothing.
-    if (viaPageCache) {
-      results.coverage = await fetchCoverageSummary(params, results.totalCount);
-    } else if (results.totalCount > 0 && meta?.lastSyncedAt != null) {
-      results.coverage = fetchBackfillCoverageSummary(params, results.totalCount, meta);
-    }
-    logDb(
-      `search ${params.term}/${params.subject || "*"} page ${params.pageOffset}+${params.pageMaxSize}` +
-        `${viaPageCache ? " (page-cache)" : ""}` +
-        ` → ${results.sectionsFetchedCount}/${results.totalCount}`
-    );
+    const results = await runSearch(params);
     return new Response(JSON.stringify(results), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
     console.error("Search failed:", err);
-    return new Response(
-      JSON.stringify({ error: "Failed to fetch search results" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "Failed to fetch search results" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 
@@ -146,6 +102,6 @@ export const GET: APIRoute = async ({ request }) => {
   // reads fill D1 (page cache / crnLazy) and must keep reaching it.
   const meta = await fetchTermSyncMeta(term);
   const profile = termCacheProfile(meta);
-  const produce = () => handleSearch(request, term, meta);
+  const produce = () => handleSearch(request, term);
   return profile ? withEdgeCache(request, profile, produce) : produce();
 };
