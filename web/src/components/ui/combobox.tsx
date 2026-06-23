@@ -77,13 +77,30 @@ export function Combobox({
       : placeholder;
 
   // Self-filter (cmdk's built-in filter is disabled below) and cap the rendered
-  // rows so a huge option list stays responsive.
+  // rows so a huge option list stays responsive. Matches are ranked so the
+  // shorthand code wins: typing "ICS" surfaces the ICS subject before AERO/GLAS
+  // whose *descriptions* happen to contain "ics" (Physics, Aeronautics, …).
+  // Description-/keyword-only hits sink to the bottom but still match, so a
+  // full-title search ("economics") keeps working.
   const q = query.trim().toLowerCase();
   const filtered = React.useMemo(() => {
     if (q === "") return options;
-    return options.filter((o) =>
-      `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
-    );
+    const rank = (o: ComboboxOption): number => {
+      const v = o.value.toLowerCase();
+      const l = o.label.toLowerCase();
+      if (v === q) return 0; // exact code
+      if (v.startsWith(q)) return 1; // code prefix
+      if (v.includes(q)) return 2; // code substring
+      if (l.startsWith(q)) return 3; // label prefix
+      return 4; // label/keyword substring only
+    };
+    return options
+      .filter((o) =>
+        `${o.label} ${o.value} ${o.keywords ?? ""}`.toLowerCase().includes(q)
+      )
+      .map((o, i) => ({ o, i, r: rank(o) }))
+      .sort((a, b) => a.r - b.r || a.i - b.i) // stable within a tier (keeps A→Z)
+      .map((x) => x.o);
   }, [options, q]);
   const visible = filtered.slice(0, MAX_VISIBLE);
   const hiddenCount = filtered.length - visible.length;

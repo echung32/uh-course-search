@@ -79,6 +79,27 @@ test("subject is optional — omitting it searches all subjects", async ({ page 
   expect(await totalSections(page)).toBeGreaterThanOrEqual(icsOnly);
 });
 
+test("subject search ranks the code match above a description-only match", async ({
+  page,
+}) => {
+  // The menu has AERO ("Aeronautics & Astronautics") and ICS. AERO sorts first
+  // alphabetically and its description contains "ics", so a plain substring
+  // filter would list AERO above ICS. Ranking by code must surface ICS first.
+  await page.locator("#subject").click();
+  await page.getByPlaceholder("Search subjects").fill("ics");
+  await expect(page.getByRole("option").first()).toContainText("ICS");
+});
+
+test("subject search still matches on the full title (description text)", async ({
+  page,
+}) => {
+  // Typing the long-form name must still find the subject — the description is a
+  // lower-ranked match, not an excluded one. "Aeronautics" only matches AERO.
+  await page.locator("#subject").click();
+  await page.getByPlaceholder("Search subjects").fill("Aeronautics");
+  await expect(page.getByRole("option").first()).toContainText("AERO");
+});
+
 test("changing term clears the subject selection", async ({ page }) => {
   // Pick a subject in the default (Fall) term.
   await pickCombobox(page, "subject", "ICS");

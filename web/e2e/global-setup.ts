@@ -232,6 +232,10 @@ export default function globalSetup() {
     "INSERT OR IGNORE INTO subject (term, code, description) VALUES (?, ?, ?)"
   );
   for (const s of SECTIONS) subjectStmt.run(s.term, s.subject, s.subjectDescription);
+  // A menu-only subject (no sections) for the combobox match-ranking test: AERO
+  // sorts before ICS alphabetically and its description contains "ics"
+  // (Aeronaut-ICS), so a search for "ics" must still rank the ICS *code* first.
+  subjectStmt.run("202710", "AERO", "Aeronautics & Astronautics");
 
   const attrStmt = db.prepare(
     "INSERT OR IGNORE INTO section_attribute (term, crn, code, description) VALUES (?, ?, ?, ?)"
