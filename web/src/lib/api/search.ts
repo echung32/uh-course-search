@@ -21,6 +21,7 @@ import type {
   SearchParams,
   SearchResultsResponse,
 } from "@/lib/sis/types";
+import type { TermSyncMeta } from "@/lib/db/queries";
 
 /** One section by (term, CRN): D1 first, live Banner fallback for dynamic terms. */
 export async function runCrnLookup(
@@ -37,17 +38,18 @@ export async function runCrnLookup(
 
 /** Full search: page cache for dynamic terms, SQL for backfilled, + coverage. */
 export async function runSearch(
-  params: SearchParams
+  params: SearchParams,
+  meta?: TermSyncMeta | null
 ): Promise<SearchResultsResponse> {
-  const meta = await fetchTermSyncMeta(params.term);
+  const resolvedMeta = meta !== undefined ? meta : await fetchTermSyncMeta(params.term);
   const viaPageCache = await ensureSearchPage(getDb(), params);
   const results = viaPageCache
     ? await fetchSearchPage(params)
     : await fetchSearchResults(params);
   if (viaPageCache) {
     results.coverage = await fetchCoverageSummary(params, results.totalCount);
-  } else if (results.totalCount > 0 && meta?.lastSyncedAt != null) {
-    results.coverage = fetchBackfillCoverageSummary(params, results.totalCount, meta);
+  } else if (results.totalCount > 0 && resolvedMeta?.lastSyncedAt != null) {
+    results.coverage = fetchBackfillCoverageSummary(params, results.totalCount, resolvedMeta);
   }
   logDb(
     `search ${params.term}/${params.subject || "*"} page ${params.pageOffset}+${params.pageMaxSize}` +

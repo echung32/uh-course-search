@@ -4,6 +4,7 @@ import { runCrnLookup, runSearch } from "@/lib/api/search";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "@/lib/pageSize";
 import type { CourseSection, SearchParams, SearchResultsResponse } from "@/lib/sis/types";
+import type { TermSyncMeta } from "@/lib/db/queries";
 
 /** Wraps a CRN lookup as a single-(or zero-)row search response for the table. */
 function crnResponse(section: CourseSection | null): SearchResultsResponse {
@@ -20,7 +21,7 @@ function crnResponse(section: CourseSection | null): SearchResultsResponse {
 }
 
 /** The uncached search handler — every D1/Banner touch happens in the service. */
-async function handleSearch(request: Request, term: string): Promise<Response> {
+async function handleSearch(request: Request, term: string, meta: TermSyncMeta | null): Promise<Response> {
   const url = new URL(request.url);
   const subject = (url.searchParams.get("subject") ?? "").trim().toUpperCase();
 
@@ -71,7 +72,7 @@ async function handleSearch(request: Request, term: string): Promise<Response> {
   };
 
   try {
-    const results = await runSearch(params);
+    const results = await runSearch(params, meta);
     return new Response(JSON.stringify(results), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -102,6 +103,6 @@ export const GET: APIRoute = async ({ request }) => {
   // reads fill D1 (page cache / crnLazy) and must keep reaching it.
   const meta = await fetchTermSyncMeta(term);
   const profile = termCacheProfile(meta);
-  const produce = () => handleSearch(request, term);
+  const produce = () => handleSearch(request, term, meta);
   return profile ? withEdgeCache(request, profile, produce) : produce();
 };
