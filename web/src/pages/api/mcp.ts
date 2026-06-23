@@ -33,4 +33,5 @@ export const POST: APIRoute = async ({ request }) => {
 export const GET: APIRoute = () =>
   new Response("Method Not Allowed. POST a JSON-RPC 2.0 message to this endpoint.", {
     status: 405,
+    headers: { Allow: "POST" },
   });

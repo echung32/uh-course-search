@@ -99,6 +99,15 @@ test("an unknown method returns -32601", async ({ request }) => {
   expect(body.error.code).toBe(-32601);
 });
 
+test("a notification (no id) returns 202 with no body", async ({ request }) => {
+  const res = await request.post(ENDPOINT, {
+    data: { jsonrpc: "2.0", method: "notifications/initialized" },
+    headers: { "Content-Type": "application/json" },
+  });
+  expect(res.status()).toBe(202);
+  expect((await res.body()).length).toBe(0);
+});
+
 test("GET /api/mcp is 405", async ({ request }) => {
   const res = await request.get(ENDPOINT);
   expect(res.status()).toBe(405);
