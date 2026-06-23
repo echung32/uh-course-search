@@ -52,6 +52,15 @@ const { title = "UH Course Search" } = Astro.props;
             >
               Analytics
             </a>
+            <a
+              href="/mcp"
+              class:list={[
+                "rounded-md px-3 py-1.5 transition-colors hover:bg-accent",
+                Astro.url.pathname === "/mcp" ? "font-medium text-foreground" : "text-muted-foreground",
+              ]}
+            >
+              MCP
+            </a>
           </nav>
         </div>
         <ThemeToggle client:load />

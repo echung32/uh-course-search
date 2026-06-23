@@ -1,0 +1,70 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const endpoint = new URL("/api/mcp", Astro.url).href;
+const tools: Array<{ name: string; desc: string }> = [
+  { name: "list_terms", desc: "Available terms (code + description + backfilled flag)." },
+  { name: "list_filters", desc: "Valid values for a filter menu (subject, campus, college, …)." },
+  { name: "search_sections", desc: "Search sections in a term; or look up one CRN." },
+  { name: "get_course", desc: "Catalog facts for one course at one campus." },
+  { name: "get_section", desc: "Per-CRN detail: restrictions, fees, cross-list, syllabus." },
+  { name: "get_instructor", desc: "Instructor contact card by Banner ID." },
+];
+---
+
+<Layout title="MCP Server — UH Course Search">
+  <div class="mx-auto max-w-3xl space-y-8">
+    <section class="space-y-3">
+      <h1 class="text-2xl font-semibold tracking-tight">MCP Server</h1>
+      <p class="text-muted-foreground">
+        Connect an AI agent (e.g. Claude) to UH course data in natural language.
+        This is a public, read-only
+        <a class="underline" href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a>
+        server exposing the course-search side of this site.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-lg font-medium">Connect</h2>
+      <p class="text-sm text-muted-foreground">
+        Add this URL as a remote MCP server in your client. No account or key required.
+      </p>
+      <pre class="overflow-x-auto rounded-md border bg-muted p-3 text-sm"><code>{endpoint}</code></pre>
+      <p class="text-sm text-muted-foreground">
+        It speaks JSON-RPC 2.0 over HTTP (stateless Streamable HTTP, JSON responses).
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-lg font-medium">Tools</h2>
+      <ul class="space-y-2 text-sm">
+        {tools.map((t) => (
+          <li class="rounded-md border p-3">
+            <code class="font-medium">{t.name}</code>
+            <span class="text-muted-foreground"> — {t.desc}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-lg font-medium">Limits</h2>
+      <ul class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        <li><strong>Rate limit:</strong> 30 tool calls per minute per IP address.</li>
+        <li><strong>Page size:</strong> <code>search_sections</code> returns at most 50 sections per call (default 20).</li>
+        <li><strong>Pagination:</strong> <code>pageOffset</code> is capped at 200 — narrow with filters (subject, course number, campus) rather than paging deeply.</li>
+        <li><strong>Read-only:</strong> no write or mutation tools.</li>
+        <li><strong>Public:</strong> no authentication; usage is best-effort and may change.</li>
+      </ul>
+    </section>
+
+    <section class="space-y-2">
+      <h2 class="text-lg font-medium">Data</h2>
+      <p class="text-sm text-muted-foreground">
+        Sourced from the University of Hawaii Student Information System. Past terms
+        are immutable snapshots; the current term refreshes daily. Unofficial
+        project, not affiliated with or endorsed by the University of Hawaii or Ellucian.
+      </p>
+    </section>
+  </div>
+</Layout>
