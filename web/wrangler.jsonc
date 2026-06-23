@@ -52,6 +52,17 @@
       "schedules": ["0 8 * * *"]
     }
   ],
+  // Cloudflare native Rate Limiting binding (GA) for the MCP server. Gates
+  // `tools/call` per client IP at 30/min (period must be 10 or 60s). Per-colo,
+  // not globally exact — fine for abuse prevention. namespace_id is an arbitrary
+  // positive integer unique to this binding.
+  "ratelimits": [
+    {
+      "name": "MCP_RATE_LIMITER",
+      "namespace_id": "1101",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
   // Runtime config readable via process.env (see compat flag above). SIS_BASE_URL
   // is the live Banner host (only the lazy cache-on-miss paths call it). Feature
   // flags default on; LOG_SOURCE off in prod. ADMIN_SECRET is a *secret*

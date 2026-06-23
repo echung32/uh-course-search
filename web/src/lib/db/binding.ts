@@ -12,6 +12,7 @@
  */
 import { env } from "cloudflare:workers";
 import type { D1Like } from "./types";
+import type { RateLimiter } from "@/lib/mcp/gate";
 
 export function getDb(): D1Like {
   const db = (env as { DB?: unknown }).DB;
@@ -25,4 +26,14 @@ export function getAnalyticsDb(): D1Like {
   const db = (env as { ANALYTICS_DB?: unknown }).ANALYTICS_DB;
   if (!db) throw new Error("D1 binding `ANALYTICS_DB` is not available on env");
   return db as D1Like;
+}
+
+/**
+ * The MCP rate-limit binding (Cloudflare native `ratelimit`). Returns null when
+ * the binding isn't present (e.g. a local runtime without ratelimit support) —
+ * checkRateLimit() then fails open. Read path / MCP only.
+ */
+export function getRateLimiter(): RateLimiter | null {
+  const rl = (env as { MCP_RATE_LIMITER?: unknown }).MCP_RATE_LIMITER;
+  return rl ? (rl as RateLimiter) : null;
 }

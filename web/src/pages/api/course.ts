@@ -7,10 +7,7 @@
  * different catalog entry. Returns 404 if not ingested.
  */
 import type { APIRoute } from "astro";
-import { getDb } from "@/lib/db/binding";
-import { fetchCourseCatalog } from "@/lib/search";
-import { ensureCourseText } from "@/lib/ingest/courseTextLazy";
-import { logDb } from "@/lib/log";
+import { runCourseCatalog } from "@/lib/api/course";
 
 function bad(message: string, status = 400): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -31,16 +28,8 @@ export const GET: APIRoute = async ({ request }) => {
   }
 
   try {
-    let catalog = await fetchCourseCatalog(term, campus, subject, courseNumber);
+    const catalog = await runCourseCatalog(term, campus, subject, courseNumber);
     if (!catalog) return bad("course not found", 404);
-    // Catalog facts are backfilled, but the text (description/prereqs/coreqs)
-    // was deferred (text=0). Fetch it live on first view, then serve from D1.
-    if (catalog.description == null) {
-      const enriched = await ensureCourseText(getDb(), term, campus, subject, courseNumber);
-      if (enriched) catalog = enriched;
-    } else {
-      logDb(`course ${term}/${subject} ${courseNumber} (cached)`);
-    }
     return new Response(JSON.stringify(catalog), {
       status: 200,
       headers: { "Content-Type": "application/json" },
