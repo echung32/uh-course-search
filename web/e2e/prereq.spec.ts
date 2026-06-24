@@ -5,6 +5,8 @@ import {
   resolvePrereqs,
   type ResolveContext,
 } from "../src/lib/prereq/resolve";
+import { localSqliteD1 } from "../src/lib/db/client";
+import { buildPrereqGraph } from "../src/lib/ingest/prereqGraph";
 
 test("parsePrereqText dedups Banner's redundant OR-branches", () => {
   const raw = [
@@ -87,4 +89,78 @@ test("resolvePrereqs keeps unmappable leaves as nonCourse, not nodes", () => {
   const { edges, nonCourse } = resolvePrereqs(ast, ctx);
   expect(edges).toHaveLength(0);
   expect(nonCourse).toContain("Instructor consent");
+});
+
+test.describe("prereq builder", () => {
+  test.describe.configure({ mode: "serial" });
+  test.beforeEach(({ browserName }, testInfo) => {
+    testInfo.skip(browserName !== "chromium");
+  });
+
+  test("buildPrereqGraph emits edges with offered/dangling flags", async () => {
+    // Uses the same local D1 the read-path fixtures live in (D1_MODE=local).
+    const db = localSqliteD1();
+    const term = "999999"; // throwaway term, cleaned up at end
+    await db.prepare("DELETE FROM course_section WHERE term = ?").bind(term).run();
+    await db.prepare("DELETE FROM course WHERE term = ?").bind(term).run();
+    await db.prepare("DELETE FROM course_prereq WHERE term = ?").bind(term).run();
+    await db.prepare("DELETE FROM prereq_edge WHERE term = ?").bind(term).run();
+    await db.prepare("DELETE FROM subject WHERE term = ?").bind(term).run();
+    await db.prepare("DELETE FROM term WHERE code = ?").bind(term).run();
+    await db.prepare(
+      "INSERT INTO term (code, description, is_view_only, display_order) VALUES (?,?,0,0)"
+    ).bind(term, "Builder Test").run();
+    // Seed subject entries so cross-subject prereq refs (e.g. "Mathematics 999") resolve
+    // even when that subject has no sections offered this term.
+    await db.prepare(
+      "INSERT INTO subject (term, code, description) VALUES (?,?,?)"
+    ).bind(term, "MATH", "Mathematics").run();
+
+    // Offered: ICS 111, ICS 211. ICS 211 requires ICS 111. ICS 311 requires ICS 211
+    // AND a not-offered MATH 999 (dangling).
+    const sections: Array<[string, string, string, string]> = [
+      ["90001", "ICS", "111", "ICS111"],
+      ["90002", "ICS", "211", "ICS211"],
+      ["90003", "ICS", "311", "ICS311"],
+    ];
+    for (const [crn, subject, num, sc] of sections) {
+      await db.prepare(
+        `INSERT INTO course_section
+          (term, crn, subject, subject_description, course_number, subject_course,
+           course_title, campus_description, maximum_enrollment, enrollment, seats_available, open_section, raw_json, synced_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(term, crn, subject, "Information& Computer Sciences", num, sc, "T", "Manoa", 10, 0, 10, 1, "{}", 1).run();
+    }
+    const prereqOf = (course: string) =>
+      `Prerequisites:${course}\n(\nCourse or Test: Information& Computer Sciences ${course}\nMinimum Grade of C\nMay not be taken concurrently.\n)`;
+    await db.prepare(
+      "INSERT INTO course (term, campus_description, subject, course_number, prerequisites, synced_at) VALUES (?,?,?,?,?,?)"
+    ).bind(term, "Manoa", "ICS", "211", prereqOf("111"), 1).run();
+    await db.prepare(
+      "INSERT INTO course (term, campus_description, subject, course_number, prerequisites, synced_at) VALUES (?,?,?,?,?,?)"
+    ).bind(
+      term, "Manoa", "ICS", "311",
+      "Prerequisites:ICS 211\n(\nCourse or Test: Information& Computer Sciences 211\nMinimum Grade of C\nand\nCourse or Test: Mathematics 999\nMinimum Grade of C\n)",
+      1
+    ).run();
+
+    const summary = await buildPrereqGraph(db, term);
+    expect(summary.coursesWithPrereqs).toBe(2);
+
+    const { results: edges } = await db
+      .prepare("SELECT prereq_course_id, course_id, prereq_offered FROM prereq_edge WHERE term = ? ORDER BY course_id, prereq_course_id")
+      .bind(term)
+      .all<{ prereq_course_id: string; course_id: string; prereq_offered: number }>();
+    expect(edges).toEqual([
+      { prereq_course_id: "ICS111", course_id: "ICS211", prereq_offered: 1 },
+      { prereq_course_id: "ICS211", course_id: "ICS311", prereq_offered: 1 },
+      { prereq_course_id: "MATH999", course_id: "ICS311", prereq_offered: 0 }, // dangling
+    ]);
+
+    // Cleanup.
+    for (const t of ["course_section", "course", "course_prereq", "prereq_edge", "subject"]) {
+      await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
+    }
+    await db.prepare("DELETE FROM term WHERE code = ?").bind(term).run();
+  });
 });
