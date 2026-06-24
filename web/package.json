@@ -12,8 +12,8 @@
     "db:snapshot": "node scripts/snapshot.mjs",
     "ingest": "tsx scripts/ingest.ts",
     "astro": "astro",
-    "test": "playwright test",
-    "test:ui": "playwright test --ui"
+    "test": "scripts/run-tests.sh",
+    "test:ui": "scripts/run-tests.sh --ui"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.6.1",

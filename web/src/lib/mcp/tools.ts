@@ -9,6 +9,7 @@ import { runCourseCatalog } from "@/lib/api/course";
 import { runSectionDetail } from "@/lib/api/section";
 import { runFilterOptions } from "@/lib/api/filters";
 import { fetchInstructor, fetchTerms } from "@/lib/search";
+import { fetchPrereqGraph } from "@/lib/prereqs";
 import { FILTER_KINDS, type FilterKind } from "@/lib/db/queries";
 import { clampMcpPage, McpInvalidInput, MCP_MAX_PAGE_SIZE } from "./limits";
 import type { McpTool, McpToolResult } from "./types";
@@ -139,7 +140,6 @@ async function listFilters(args: Record<string, unknown>): Promise<McpToolResult
 }
 
 async function getPrereqGraph(args: Record<string, unknown>): Promise<McpToolResult> {
-  const { fetchPrereqGraph } = await import("@/lib/prereqs");
   const course = reqStr(args, "course");
   const campus = reqStr(args, "campus");
   const dir = optStr(args, "direction") ?? "prereqs";
