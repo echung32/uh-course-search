@@ -4,11 +4,26 @@ import { parsePrereqText } from "../src/lib/prereq/parse";
 import {
   splitCourseRef,
   resolvePrereqs,
+  normalizeSubjectDescription,
   type ResolveContext,
 } from "../src/lib/prereq/resolve";
 import { localSqliteD1 } from "../src/lib/db/client";
 import { buildPrereqGraph } from "../src/lib/ingest/prereqGraph";
 import { getPrereqSubgraph } from "../src/lib/db/prereqQueries";
+
+test("normalizeSubjectDescription decodes HTML entities and collapses whitespace", () => {
+  expect(normalizeSubjectDescription("Information&amp; Computer Sciences")).toBe(
+    "Information& Computer Sciences"
+  );
+  expect(normalizeSubjectDescription("Electrical&amp;ComputerEngineering")).toBe(
+    "Electrical&ComputerEngineering"
+  );
+  expect(normalizeSubjectDescription("  Mathematics  ")).toBe("Mathematics");
+  // Already-decoded strings pass through unchanged.
+  expect(normalizeSubjectDescription("Information& Computer Sciences")).toBe(
+    "Information& Computer Sciences"
+  );
+});
 
 test("parsePrereqText dedups Banner's redundant OR-branches", () => {
   const raw = [
@@ -158,6 +173,66 @@ test.describe("prereq builder", () => {
       { prereq_course_id: "ICS211", course_id: "ICS311", prereq_offered: 1 },
       { prereq_course_id: "MATH999", course_id: "ICS311", prereq_offered: 0 }, // dangling
     ]);
+
+    // Cleanup.
+    for (const t of ["course_section", "course", "course_prereq", "prereq_edge", "subject"]) {
+      await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
+    }
+    await db.prepare("DELETE FROM term WHERE code = ?").bind(term).run();
+  });
+
+  test("buildPrereqGraph resolves edges when subject_description is entity-encoded (production asymmetry)", async () => {
+    // Regression: course_section.subject_description is stored entity-encoded
+    // ("Information&amp; Computer Sciences") while course.prerequisites text is
+    // decoded ("Information& Computer Sciences"). Without normalization the map
+    // lookup misses and every such subject falls to nonCourse → zero edges.
+    const db = localSqliteD1();
+    const term = "999997"; // unique throwaway term
+    for (const t of ["course_section", "course", "course_prereq", "prereq_edge", "subject"]) {
+      await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
+    }
+    await db.prepare("DELETE FROM term WHERE code = ?").bind(term).run();
+    await db.prepare(
+      "INSERT INTO term (code, description, is_view_only, display_order) VALUES (?,?,0,0)"
+    ).bind(term, "Asymmetric Entity Test").run();
+
+    // Seed: subject_description is entity-encoded (production Banner form).
+    const sections: Array<[string, string, string, string]> = [
+      ["91001", "ICS", "211", "ICS211"],
+      ["91002", "ICS", "311", "ICS311"],
+    ];
+    for (const [crn, subject, num, sc] of sections) {
+      await db.prepare(
+        `INSERT INTO course_section
+          (term, crn, subject, subject_description, course_number, subject_course,
+           course_title, campus_description, maximum_enrollment, enrollment, seats_available, open_section, raw_json, synced_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        term, crn, subject,
+        "Information&amp; Computer Sciences", // entity-encoded — the production form
+        num, sc, "T", "Manoa", 10, 0, 10, 1, "{}", 1
+      ).run();
+    }
+    // course.prerequisites uses the DECODED form (parser decodes entities).
+    await db.prepare(
+      "INSERT INTO course (term, campus_description, subject, course_number, prerequisites, synced_at) VALUES (?,?,?,?,?,?)"
+    ).bind(
+      term, "Manoa", "ICS", "311",
+      "Prerequisites:ICS 211\n(\nCourse or Test: Information& Computer Sciences 211\nMinimum Grade of C\nMay not be taken concurrently.\n)",
+      1
+    ).run();
+
+    const summary = await buildPrereqGraph(db, term);
+    // Must resolve 1 edge (ICS211 → ICS311); without normalization produces 0.
+    expect(summary.edgeRows).toBe(1);
+    expect(summary.coursesWithPrereqs).toBe(1);
+    expect(summary.nonCourseLeaves).toBe(0);
+
+    const { results: edges } = await db
+      .prepare("SELECT prereq_course_id, course_id FROM prereq_edge WHERE term = ?")
+      .bind(term)
+      .all<{ prereq_course_id: string; course_id: string }>();
+    expect(edges).toEqual([{ prereq_course_id: "ICS211", course_id: "ICS311" }]);
 
     // Cleanup.
     for (const t of ["course_section", "course", "course_prereq", "prereq_edge", "subject"]) {

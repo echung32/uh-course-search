@@ -7,7 +7,7 @@
  */
 import type { D1Like, D1PreparedStatement } from "@/lib/db/types";
 import { parsePrereqText } from "@/lib/prereq/parse";
-import { resolvePrereqs, type ResolveContext } from "@/lib/prereq/resolve";
+import { resolvePrereqs, normalizeSubjectDescription, type ResolveContext } from "@/lib/prereq/resolve";
 
 const INSERT_CHUNK = 90; // ≤100-param remote-D1 cap
 
@@ -45,9 +45,9 @@ async function loadSubjectMap(db: D1Like, term: string): Promise<Map<string, str
     .all<{ code: string; description: string }>();
   const map = new Map<string, string>();
   // subject table first (lower priority if overridden by section data).
-  for (const r of subRows) map.set(r.description, r.code);
+  for (const r of subRows) map.set(normalizeSubjectDescription(r.description), r.code);
   // section rows win (Banner's live subject_description is the canonical form used in prereq text).
-  for (const r of secRows) map.set(r.subject_description, r.subject);
+  for (const r of secRows) map.set(normalizeSubjectDescription(r.subject_description), r.subject);
   return map;
 }
 
@@ -88,6 +88,7 @@ export interface PrereqBuildSummary {
   courseRows: number;
   edgeRows: number;
   coursesWithPrereqs: number;
+  nonCourseLeaves: number;
 }
 
 export async function buildPrereqGraph(
@@ -117,6 +118,7 @@ export async function buildPrereqGraph(
   }
   const courseRows: CourseRow[] = [];
   const edgeRows: EdgeRow[] = [];
+  let nonCourseLeaves = 0;
 
   for (const oc of owning) {
     const ast = parsePrereqText(oc.raw);
@@ -125,6 +127,7 @@ export async function buildPrereqGraph(
       offeredIds: await offered(oc.campus),
     };
     const { edges, nonCourse } = resolvePrereqs(ast, ctx);
+    nonCourseLeaves += nonCourse.length;
     courseRows.push({
       campus: oc.campus,
       course_id: oc.course_id,
@@ -180,7 +183,8 @@ export async function buildPrereqGraph(
     term,
     courseRows: courseRows.length,
     edgeRows: edgeRows.length,
-    coursesWithPrereqs: courseRows.length,
+    coursesWithPrereqs: new Set(edgeRows.map((e) => e.course_id)).size,
+    nonCourseLeaves,
   };
 }
 
@@ -200,7 +204,7 @@ export async function buildAllPrereqGraphs(
   const out: PrereqBuildSummary[] = [];
   for (const code of codes) {
     const s = await buildPrereqGraph(db, code, now);
-    log(`[prereqs] ${code}: ${s.coursesWithPrereqs} courses, ${s.edgeRows} edges`);
+    log(`[prereqs] ${code}: ${s.coursesWithPrereqs}/${s.courseRows} courses resolved ≥1 edge, ${s.edgeRows} edges, ${s.nonCourseLeaves} non-course leaves`);
     out.push(s);
   }
   return out;

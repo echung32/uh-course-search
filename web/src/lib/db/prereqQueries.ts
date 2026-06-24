@@ -103,6 +103,7 @@ export async function getPrereqSubgraph(
       .first<{ subject: string; course_number: string; title: string | null }>();
     nodes.push({
       id,
+      // Assumes all-alpha subject codes (true for UH today): strip trailing digits for subject, leading letters for number.
       subject: row?.subject ?? id.replace(/\d.*$/, ""),
       number: row?.course_number ?? id.replace(/^\D+/, ""),
       title: row?.title ?? null,

@@ -13,6 +13,22 @@
  */
 import type { ParsedPrereqs } from "./parse";
 
+/** Normalize a Banner subject description for matching: decode HTML entities
+ *  (course_section.subject_description is entity-encoded — "&amp;" — while the
+ *  parsed prereq text is decoded — "&"), then collapse internal whitespace and
+ *  trim, so both sides compare equal. */
+export function normalizeSubjectDescription(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export interface ResolvedEdge {
   prereqCourseId: string;
   groupIndex: number;
@@ -47,7 +63,7 @@ export function resolvePrereqs(ast: ParsedPrereqs, ctx: ResolveContext): Resolve
     block.groups.forEach((group, altIndex) => {
       for (const cond of group.conditions) {
         const split = splitCourseRef(cond.course);
-        const code = split ? ctx.subjectByDescription.get(split.description) : undefined;
+        const code = split ? ctx.subjectByDescription.get(normalizeSubjectDescription(split.description)) : undefined;
         if (!split || !code) {
           // Unmappable → a non-course requirement (consent, test score, unknown subject).
           if (cond.course.trim()) nonCourse.push(cond.course.trim());
