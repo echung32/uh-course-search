@@ -7,6 +7,7 @@ import {
 } from "../src/lib/prereq/resolve";
 import { localSqliteD1 } from "../src/lib/db/client";
 import { buildPrereqGraph } from "../src/lib/ingest/prereqGraph";
+import { getPrereqSubgraph } from "../src/lib/db/prereqQueries";
 
 test("parsePrereqText dedups Banner's redundant OR-branches", () => {
   const raw = [
@@ -162,5 +163,42 @@ test.describe("prereq builder", () => {
       await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
     }
     await db.prepare("DELETE FROM term WHERE code = ?").bind(term).run();
+  });
+
+  test("getPrereqSubgraph walks prereqs to depth and cycle-guards", async () => {
+    const db = localSqliteD1();
+    const term = "999998";
+    for (const t of ["prereq_edge", "course_prereq", "course_section"]) {
+      await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
+    }
+    // Chain ICS311 -> ICS211 -> ICS111, plus a self-cycle ICS111 -> ICS111.
+    const edges: Array<[string, string]> = [
+      ["ICS211", "ICS311"], ["ICS111", "ICS211"], ["ICS111", "ICS111"],
+    ];
+    for (const [pre, course] of edges) {
+      await db.prepare(
+        `INSERT INTO prereq_edge (term, campus, prereq_course_id, course_id, group_index, alt_index, min_grade, concurrent, prereq_offered)
+         VALUES (?, 'Manoa', ?, ?, 0, 0, 'C', 'no', 1)`
+      ).bind(term, pre, course).run();
+    }
+    for (const [id, num] of [["ICS311", "311"], ["ICS211", "211"], ["ICS111", "111"]]) {
+      await db.prepare(
+        `INSERT INTO course_section (term, crn, subject, subject_description, course_number, subject_course, course_title, campus_description, maximum_enrollment, enrollment, seats_available, open_section, raw_json, synced_at)
+         VALUES (?, ?, 'ICS', 'Information& Computer Sciences', ?, ?, ?, 'Manoa', 10, 0, 10, 1, '{}', 1)`
+      ).bind(term, `c${id}`, num, id, `Title ${num}`).run();
+    }
+
+    const g = await getPrereqSubgraph(db, {
+      term, campus: "Manoa", course: "ICS311", direction: "prereqs", depth: 5,
+    });
+    expect(g.roots).toEqual(["ICS311"]);
+    const ids = g.nodes.map((n) => n.id).sort();
+    expect(ids).toEqual(["ICS111", "ICS211", "ICS311"]);
+    // The self-cycle on ICS111 did not loop forever; ICS111->ICS111 edge present once.
+    expect(g.edges.filter((e) => e.from === "ICS111" && e.to === "ICS111")).toHaveLength(1);
+
+    for (const t of ["prereq_edge", "course_prereq", "course_section"]) {
+      await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
+    }
   });
 });
