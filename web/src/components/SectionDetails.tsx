@@ -161,7 +161,7 @@ function PrereqSection({ title, text, subjectCourse, campusDescription }: { titl
   const { label } = parsePrereqText(text);
   const heading = label ?? title;
   const tip = showRaw ? "Show formatted" : "Show raw source";
-  const courseId = (subjectCourse ?? "").replace(/\s+/g, "");
+  const courseId = subjectCourse.replace(/\s+/g, "");
   return (
     <Section
       title={heading}

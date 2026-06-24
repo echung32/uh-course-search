@@ -50,11 +50,25 @@ export function PrereqApp({
         borderRadius: 8, padding: 6, fontSize: 12, width: 160,
       },
     }));
-    const rfEdges: Edge[] = graph.edges.map((e: GraphEdge, i) => ({
-      id: `e${i}`, source: e.from, target: e.to,
-      label: e.concurrent === "yes" ? `${e.grade ?? ""} (concurrent)` : (e.grade ?? ""),
-      animated: false,
-    }));
+    // Determine which edges are OR-alternatives: edges sharing the same (to, groupIndex)
+    // with more than one distinct altIndex are substitutable alternatives (pick one).
+    const orGroupSizes = new Map<string, Set<number>>();
+    for (const e of graph.edges) {
+      const key = `${e.to}|${e.groupIndex}`;
+      if (!orGroupSizes.has(key)) orGroupSizes.set(key, new Set());
+      orGroupSizes.get(key)!.add(e.altIndex);
+    }
+    const rfEdges: Edge[] = graph.edges.map((e: GraphEdge, i) => {
+      const key = `${e.to}|${e.groupIndex}`;
+      const isOr = (orGroupSizes.get(key)?.size ?? 0) > 1;
+      const baseLabel = e.concurrent === "yes" ? `${e.grade ?? ""} (concurrent)` : (e.grade ?? "");
+      return {
+        id: `e${i}`, source: e.from, target: e.to,
+        label: isOr ? (baseLabel ? `${baseLabel} (or)` : "(or)") : baseLabel,
+        style: isOr ? { strokeDasharray: "4 3" } : undefined,
+        animated: false,
+      };
+    });
     return { rfNodes, rfEdges };
   }, [graph]);
 

@@ -23,6 +23,6 @@ try {
         Trace the pathway to a class — what it requires, and what it unlocks.
       </p>
     </div>
-    <PrereqApp client:load campuses={campuses} initialCourse={initialCourse} initialCampus={initialCampus} />
+    <PrereqApp client:only="react" campuses={campuses} initialCourse={initialCourse} initialCampus={initialCampus} />
   </div>
 </Layout>
