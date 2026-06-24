@@ -8,6 +8,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { CourseSection } from "@/lib/sis/types";
+import {
+  type Condition,
+  type ReqGroup,
+  type PrereqBlock,
+  type ParsedPrereqs,
+  parsePrereqText,
+} from "@/lib/prereq/parse";
 
 // Shapes returned by the read API routes (subset we render).
 interface CourseCatalog {
@@ -72,120 +79,6 @@ function Section({
       <div className="text-sm">{children}</div>
     </div>
   );
-}
-
-interface Condition {
-  course: string;
-  grade: string;
-  // Banner states this explicitly per condition: "yes" = may be taken
-  // concurrently, "no" = may not, null = not stated.
-  concurrent: "yes" | "no" | null;
-}
-
-interface ReqGroup {
-  conditions: Condition[];
-}
-
-interface PrereqBlock {
-  summary: string;
-  groups: ReqGroup[];
-  ops: ("or" | "and")[];
-}
-
-interface ParsedPrereqs {
-  label: string | null;
-  blocks: PrereqBlock[];
-}
-
-function parseGroupConditions(rawLines: string[]): Condition[] {
-  const conditions: Condition[] = [];
-  let chunk: string[] = [];
-
-  function flush() {
-    if (!chunk.length) return;
-    const courseLine = chunk.find((l) => l.startsWith("Course or Test:"));
-    const gradeMatch = chunk
-      .find((l) => l.startsWith("Minimum Grade"))
-      ?.match(/Minimum Grade of (.+)/);
-    const concLine = chunk.find((l) => /may( not)? be taken concurrently/i.test(l));
-    const concurrent: "yes" | "no" | null = concLine
-      ? /\bnot\b/i.test(concLine)
-        ? "no"
-        : "yes"
-      : null;
-    const course = courseLine
-      ? courseLine
-          .replace(/^Course or Test:\s*/, "")
-          // Normalize "Subject NNN to NNN" single-course ranges → "Subject NNN"
-          .replace(/(\d+) to \1$/, "$1")
-          .trim()
-      : chunk[0];
-    conditions.push({ course, grade: gradeMatch?.[1] ?? "", concurrent });
-    chunk = [];
-  }
-
-  for (const line of rawLines) {
-    if (line === "and") flush();
-    else chunk.push(line);
-  }
-  flush();
-  return conditions;
-}
-
-function groupKey(g: ReqGroup) {
-  return g.conditions.map((c) => `${c.course}|${c.grade}|${c.concurrent}`).join(";;");
-}
-
-function parsePrereqText(raw: string): ParsedPrereqs {
-  const lines = raw.split("\n");
-  let label: string | null = null;
-  const blocks: PrereqBlock[] = [];
-  let cur: PrereqBlock | null = null;
-  let seen = new Set<string>();
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i].trim();
-    if (line === "(") {
-      const rawGroupLines: string[] = [];
-      i++;
-      while (i < lines.length && lines[i].trim() !== ")") {
-        if (lines[i].trim()) rawGroupLines.push(lines[i].trim());
-        i++;
-      }
-      if (cur) {
-        const group: ReqGroup = { conditions: parseGroupConditions(rawGroupLines) };
-        const key = groupKey(group);
-        if (!seen.has(key)) {
-          seen.add(key);
-          cur.groups.push(group);
-        } else {
-          // Dup: remove the op that was added between the last group and this one
-          if (cur.ops.length >= cur.groups.length) cur.ops.pop();
-        }
-      }
-    } else if (line === "or" || line === "and") {
-      cur?.ops.push(line as "or" | "and");
-    } else if (/^(Prerequisites|Test Score|Corequisite):/i.test(line)) {
-      cur = {
-        summary: line.replace(/^(Prerequisites|Test Score|Corequisite):\s*/i, "").trim(),
-        groups: [],
-        ops: [],
-      };
-      blocks.push(cur);
-      seen = new Set();
-    } else if (line && !cur) {
-      label = label ?? line;
-    }
-    i++;
-  }
-
-  // Trim any trailing ops left from dedup
-  for (const block of blocks) {
-    while (block.ops.length >= block.groups.length) block.ops.pop();
-  }
-
-  return { label, blocks };
 }
 
 function GroupCard({ group }: { group: ReqGroup }) {
@@ -262,34 +155,45 @@ function PrereqDisplay({ text }: { text: string }) {
   );
 }
 
-function PrereqSection({ title, text }: { title: string; text: string }) {
+function PrereqSection({ title, text, subjectCourse, campusDescription }: { title: string; text: string; subjectCourse: string; campusDescription: string | null }) {
   const [showRaw, setShowRaw] = useState(false);
   // Promote Banner's label (almost always "Area Prerequisites") to the heading.
   const { label } = parsePrereqText(text);
   const heading = label ?? title;
   const tip = showRaw ? "Show formatted" : "Show raw source";
+  const courseId = subjectCourse.replace(/\s+/g, "");
   return (
     <Section
       title={heading}
       action={
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => setShowRaw((v) => !v)}
-                aria-pressed={showRaw}
-                aria-label={tip}
-                className={`cursor-pointer rounded p-0.5 hover:text-foreground ${
-                  showRaw ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <Code className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{tip}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center gap-1.5">
+          {courseId && campusDescription && (
+            <a
+              href={`/prereqs?course=${encodeURIComponent(courseId)}&campus=${encodeURIComponent(campusDescription)}`}
+              className="text-xs text-blue-600 underline decoration-dotted hover:text-blue-800 dark:text-blue-400"
+            >
+              View prereq graph
+            </a>
+          )}
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setShowRaw((v) => !v)}
+                  aria-pressed={showRaw}
+                  aria-label={tip}
+                  className={`cursor-pointer rounded p-0.5 hover:text-foreground ${
+                    showRaw ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  <Code className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{tip}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       }
     >
       {showRaw ? (
@@ -406,10 +310,10 @@ export function SectionDetails({
         </Section>
 
         {catalog?.prerequisites && (
-          <PrereqSection title="Prerequisites" text={catalog.prerequisites} />
+          <PrereqSection title="Prerequisites" text={catalog.prerequisites} subjectCourse={section.subjectCourse} campusDescription={section.campusDescription} />
         )}
         {catalog?.corequisites && (
-          <PrereqSection title="Corequisites" text={catalog.corequisites} />
+          <PrereqSection title="Corequisites" text={catalog.corequisites} subjectCourse={section.subjectCourse} campusDescription={section.campusDescription} />
         )}
 
         {(catalog?.collegeName || catalog?.department) && (

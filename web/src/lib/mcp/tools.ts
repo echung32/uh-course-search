@@ -9,6 +9,7 @@ import { runCourseCatalog } from "@/lib/api/course";
 import { runSectionDetail } from "@/lib/api/section";
 import { runFilterOptions } from "@/lib/api/filters";
 import { fetchInstructor, fetchTerms } from "@/lib/search";
+import { fetchPrereqGraph } from "@/lib/prereqs";
 import { FILTER_KINDS, type FilterKind } from "@/lib/db/queries";
 import { clampMcpPage, McpInvalidInput, MCP_MAX_PAGE_SIZE } from "./limits";
 import type { McpTool, McpToolResult } from "./types";
@@ -138,6 +139,19 @@ async function listFilters(args: Record<string, unknown>): Promise<McpToolResult
   return textResult({ kind, options });
 }
 
+async function getPrereqGraph(args: Record<string, unknown>): Promise<McpToolResult> {
+  const course = reqStr(args, "course");
+  const campus = reqStr(args, "campus");
+  const dir = optStr(args, "direction") ?? "prereqs";
+  const direction = (["prereqs", "unlocks", "both"].includes(dir) ? dir : "prereqs") as
+    "prereqs" | "unlocks" | "both";
+  const depthRaw = typeof args.depth === "number" ? args.depth : Number(args.depth);
+  const depth = Math.max(1, Math.min(Number.isFinite(depthRaw) ? depthRaw : 3, 8));
+  const term = optStr(args, "term");
+  const graph = await fetchPrereqGraph({ term, campus, course, direction, depth });
+  return textResult(graph);
+}
+
 export const TOOLS: McpTool[] = [
   {
     name: "list_terms",
@@ -252,5 +266,23 @@ export const TOOLS: McpTool[] = [
       additionalProperties: false,
     },
     handler: getInstructor,
+  },
+  {
+    name: "get_prereq_graph",
+    description:
+      "Prerequisite graph around one course (term defaults to current). direction=prereqs walks what it requires; unlocks walks what it leads to; both. Returns nodes, edges (with grade/concurrency + group/alt for OR-alternatives), roots, and the focused course's AST. Edges sharing course+group but differing alt are substitutable alternatives.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        course: { type: "string", description: "Course id, e.g. ICS311 (subject + display number)." },
+        campus: { type: "string", description: "Campus DESCRIPTION (e.g. University of Hawaii at Manoa)." },
+        direction: { type: "string", enum: ["prereqs", "unlocks", "both"], description: "Default prereqs." },
+        depth: { type: "integer", minimum: 1, maximum: 8, description: "Traversal depth (default 3)." },
+        term: { type: "string", description: "6-digit term code; defaults to current." },
+      },
+      required: ["course", "campus"],
+      additionalProperties: false,
+    },
+    handler: getPrereqGraph,
   },
 ];

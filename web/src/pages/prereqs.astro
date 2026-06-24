@@ -1,0 +1,39 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { PrereqApp } from "../components/prereq/PrereqApp";
+import { fetchCampuses, fetchCourseOptions } from "../lib/analytics";
+import { fetchCurrentPrereqTermInfo } from "../lib/prereqs";
+
+let campuses: string[] = [];
+let courses: Array<{ value: string; label: string }> = [];
+let termLabel = "";
+try {
+  const [campusList, courseOptions, termInfo] = await Promise.all([
+    fetchCampuses(),
+    fetchCourseOptions(),
+    fetchCurrentPrereqTermInfo(),
+  ]);
+  campuses = campusList;
+  termLabel = termInfo?.description ?? "";
+  // subjectCourse is "ICS 311"; the graph node id is the space-stripped "ICS311".
+  courses = courseOptions.map((c) => ({
+    value: c.subjectCourse.replace(/\s+/g, ""),
+    label: c.subjectCourse,
+  }));
+} catch (err) {
+  console.error("Failed to load prereq page data:", err);
+}
+---
+
+<Layout title="UH Course Search — Prereqs">
+  <div class="space-y-6">
+    <div>
+      <h1 class="text-2xl font-bold tracking-tight">Prerequisite Explorer</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        Trace the pathway to a class — what it requires, and what it unlocks.
+        {termLabel && <> Showing <span class="font-medium text-foreground">{termLabel}</span> prerequisites.</>}
+      </p>
+    </div>
+    <PrereqApp client:only="react" campuses={campuses} courses={courses} />
+  </div>
+</Layout>

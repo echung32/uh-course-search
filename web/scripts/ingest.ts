@@ -29,6 +29,7 @@ import { refreshMutableTerms } from "@/lib/ingest/refresh";
 import { backfillNextTerm } from "@/lib/ingest/backfill";
 import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
 import { computeAllRollups } from "@/lib/ingest/rollups";
+import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
 
 type Flags = Record<string, string | boolean>;
 
@@ -153,9 +154,20 @@ async function main() {
       break;
     }
 
+    case "prereqs": {
+      const results = await buildAllPrereqGraphs(db, {
+        terms: typeof flags.term === "string" ? [flags.term] : undefined,
+        log,
+      });
+      console.log(
+        JSON.stringify({ ok: true, terms: results.length, results: results.slice(0, 5) }, null, 2)
+      );
+      break;
+    }
+
     default:
       console.error(
-        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|rollups> [flags]"
+        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|rollups|prereqs> [flags]"
       );
       process.exit(1);
   }
