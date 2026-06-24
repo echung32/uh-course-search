@@ -2,7 +2,9 @@
  * Prereq graph explorer island. Fetches /api/prereqs for the focused course and
  * renders a React Flow DAG laid out by layoutGraph. Searchable course/campus
  * pickers + direction/depth selects above the canvas. Clicking a node re-centers
- * the graph on it. Theme-aware (follows the app's .dark class via colorMode).
+ * the graph on it; nodes are draggable so a user can untangle dense graphs.
+ * All four inputs live in the URL (nuqs) so a view is shareable. Theme-aware
+ * (follows the app's .dark class via React Flow's colorMode).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -12,12 +14,16 @@ import {
   Handle,
   Position,
   MarkerType,
+  useNodesState,
+  useEdgesState,
   type Node,
   type Edge,
   type NodeProps,
   type ColorMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { NuqsAdapter } from "nuqs/adapters/react";
+import { useQueryStates, parseAsString, parseAsStringLiteral, parseAsInteger } from "nuqs";
 import { layoutGraph, NODE_W } from "./layout";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Label } from "@/components/ui/label";
@@ -82,21 +88,27 @@ function displayCode(n: GraphNode): string {
   return `${n.subject} ${num}`;
 }
 
-export function PrereqApp({
-  campuses,
-  courses,
-  initialCourse,
-  initialCampus,
-}: {
+interface PrereqAppProps {
   campuses: string[];
   courses: ComboboxOption[];
-  initialCourse: string;
-  initialCampus: string;
-}) {
-  const [course, setCourse] = useState(initialCourse);
-  const [campus, setCampus] = useState(initialCampus || campuses[0] || "");
-  const [direction, setDirection] = useState<Direction>("prereqs");
-  const [depth, setDepth] = useState(2);
+}
+
+function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
+  // URL-backed state (nuqs) so every view is shareable and the back button works.
+  // Defaults (both / depth 2) are omitted from the URL by nuqs, keeping it clean.
+  const [q, setQ] = useQueryStates(
+    {
+      course: parseAsString.withDefault(""),
+      campus: parseAsString.withDefault(campuses[0] ?? ""),
+      direction: parseAsStringLiteral(["prereqs", "unlocks", "both"] as const).withDefault("both"),
+      depth: parseAsInteger.withDefault(2),
+    },
+    { history: "push" }
+  );
+  const { course, campus } = q;
+  const direction = q.direction as Direction;
+  const depth = Math.max(1, Math.min(6, q.depth));
+
   const [graph, setGraph] = useState<PrereqSubgraph | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -113,7 +125,10 @@ export function PrereqApp({
   }, []);
 
   useEffect(() => {
-    if (!course || !campus) return;
+    if (!course || !campus) {
+      setGraph(null);
+      return;
+    }
     setLoading(true);
     const params = new URLSearchParams({ course, campus, direction, depth: String(depth) });
     fetch(`/api/prereqs?${params}`)
@@ -127,11 +142,11 @@ export function PrereqApp({
     [campuses]
   );
 
-  const { rfNodes, rfEdges } = useMemo(() => {
-    if (!graph) return { rfNodes: [] as Node[], rfEdges: [] as Edge[] };
+  const { computedNodes, computedEdges } = useMemo(() => {
+    if (!graph) return { computedNodes: [] as Node[], computedEdges: [] as Edge[] };
     const pos = new Map(layoutGraph(graph.nodes, graph.edges).map((p) => [p.id, p]));
     const root = graph.roots[0];
-    const rfNodes: Node[] = graph.nodes.map((n: GraphNode) => ({
+    const computedNodes: Node[] = graph.nodes.map((n: GraphNode) => ({
       id: n.id,
       type: "course",
       position: { x: pos.get(n.id)?.x ?? 0, y: pos.get(n.id)?.y ?? 0 },
@@ -145,7 +160,7 @@ export function PrereqApp({
       const key = `${e.to}|${e.groupIndex}`;
       (altCounts.get(key) ?? altCounts.set(key, new Set()).get(key)!).add(e.altIndex);
     }
-    const rfEdges: Edge[] = graph.edges.map((e: GraphEdge, i) => {
+    const computedEdges: Edge[] = graph.edges.map((e: GraphEdge, i) => {
       const isOr = (altCounts.get(`${e.to}|${e.groupIndex}`)?.size ?? 0) > 1;
       const color = isOr ? OR_COLOR : REQ_COLOR;
       return {
@@ -157,10 +172,23 @@ export function PrereqApp({
         style: { stroke: color, strokeWidth: 1.5, strokeDasharray: isOr ? "5 4" : undefined },
       };
     });
-    return { rfNodes, rfEdges };
+    return { computedNodes, computedEdges };
   }, [graph]);
 
-  const onNodeClick = useCallback((_: unknown, node: Node) => setCourse(node.id), []);
+  // Controlled node/edge state so nodes are draggable (the user can untangle a
+  // dense graph). Re-synced whenever a new graph is computed.
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  useEffect(() => {
+    setNodes(computedNodes);
+    setEdges(computedEdges);
+  }, [computedNodes, computedEdges, setNodes, setEdges]);
+
+  const onNodeClick = useCallback((_: unknown, node: Node) => setQ({ course: node.id }), [setQ]);
+
+  // Remount (and thus re-fitView) whenever the underlying graph identity changes,
+  // so a fresh query is framed correctly while drags persist within one graph.
+  const graphKey = `${course}|${campus}|${direction}|${depth}`;
 
   return (
     <div className="space-y-3">
@@ -171,7 +199,7 @@ export function PrereqApp({
             id="prereq-course"
             options={courses}
             value={course}
-            onChange={setCourse}
+            onChange={(v) => setQ({ course: v })}
             placeholder="Select a course"
             searchPlaceholder="Search courses…"
           />
@@ -182,27 +210,27 @@ export function PrereqApp({
             id="prereq-campus"
             options={campusOptions}
             value={campus}
-            onChange={setCampus}
+            onChange={(v) => setQ({ campus: v })}
             placeholder="Select a campus"
             searchPlaceholder="Search campuses…"
           />
         </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor="prereq-direction">Direction</Label>
-          <Select value={direction} onValueChange={(v) => setDirection(v as Direction)}>
+          <Select value={direction} onValueChange={(v) => setQ({ direction: v as Direction })}>
             <SelectTrigger id="prereq-direction" className="w-[160px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="both">Both</SelectItem>
               <SelectItem value="prereqs">Prerequisites ↓</SelectItem>
               <SelectItem value="unlocks">Unlocks ↑</SelectItem>
-              <SelectItem value="both">Both</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor="prereq-depth">Depth</Label>
-          <Select value={String(depth)} onValueChange={(v) => setDepth(Number(v))}>
+          <Select value={String(depth)} onValueChange={(v) => setQ({ depth: Number(v) })}>
             <SelectTrigger id="prereq-depth" className="w-[80px]">
               <SelectValue />
             </SelectTrigger>
@@ -218,9 +246,12 @@ export function PrereqApp({
       <div className="h-[620px] overflow-hidden rounded-md border" data-testid="prereq-canvas">
         {graph && graph.nodes.length > 0 ? (
           <ReactFlow
+            key={graphKey}
             colorMode={colorMode}
-            nodes={rfNodes}
-            edges={rfEdges}
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             onNodeClick={onNodeClick}
             nodesConnectable={false}
@@ -248,8 +279,16 @@ export function PrereqApp({
           <span className="inline-block w-6 border-t-2 border-dashed" style={{ borderColor: OR_COLOR }} />
           one of (alternatives)
         </span>
-        <span>Arrows point toward the course they unlock. Click a node to re-center.</span>
+        <span>Arrows point toward the course they unlock. Click a node to re-center; drag to rearrange.</span>
       </div>
     </div>
+  );
+}
+
+export function PrereqApp(props: PrereqAppProps) {
+  return (
+    <NuqsAdapter>
+      <PrereqExplorer {...props} />
+    </NuqsAdapter>
   );
 }

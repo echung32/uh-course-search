@@ -15,9 +15,18 @@ export interface Positioned { id: string; x: number; y: number; }
 export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[]): Positioned[] {
   const g = new dagre.graphlib.Graph();
   // Generous separation so dense alternative-heavy graphs (e.g. ICS 311) don't
-  // collapse into an unreadable hairball. `ranksep` spreads the layers; `nodesep`
-  // spreads siblings within a layer.
-  g.setGraph({ rankdir: "BT", nodesep: 64, ranksep: 110, marginx: 16, marginy: 16 });
+  // collapse into an unreadable hairball. `ranksep` spreads the layers, `nodesep`
+  // spreads siblings within a layer, `edgesep` keeps parallel edges from
+  // overlapping. network-simplex minimizes edge crossings (the default ranker).
+  g.setGraph({
+    rankdir: "BT",
+    nodesep: 70,
+    ranksep: 130,
+    edgesep: 30,
+    ranker: "network-simplex",
+    marginx: 16,
+    marginy: 16,
+  });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
   for (const e of edges) if (e.from !== e.to) g.setEdge(e.from, e.to);

@@ -3,10 +3,6 @@ import Layout from "../layouts/Layout.astro";
 import { PrereqApp } from "../components/prereq/PrereqApp";
 import { fetchCampuses, fetchCourseOptions } from "../lib/analytics";
 
-const url = new URL(Astro.request.url);
-const initialCourse = (url.searchParams.get("course") ?? "").toUpperCase().replace(/\s+/g, "");
-const initialCampus = url.searchParams.get("campus") ?? "";
-
 let campuses: string[] = [];
 let courses: Array<{ value: string; label: string }> = [];
 try {
@@ -33,12 +29,6 @@ try {
         Trace the pathway to a class — what it requires, and what it unlocks.
       </p>
     </div>
-    <PrereqApp
-      client:only="react"
-      campuses={campuses}
-      courses={courses}
-      initialCourse={initialCourse}
-      initialCampus={initialCampus}
-    />
+    <PrereqApp client:only="react" campuses={campuses} courses={courses} />
   </div>
 </Layout>
