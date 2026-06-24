@@ -12,7 +12,7 @@ export interface GraphEdge {
   from: string; to: string; groupIndex: number; altIndex: number;
   grade: string | null; concurrent: string | null;
 }
-export interface PrereqSubgraph { nodes: GraphNode[]; edges: GraphEdge[]; roots: string[]; ast: unknown | null; }
+export interface PrereqSubgraph { term: string; nodes: GraphNode[]; edges: GraphEdge[]; roots: string[]; ast: unknown | null; }
 
 interface EdgeRow {
   prereq_course_id: string; course_id: string;
@@ -117,6 +117,7 @@ export async function getPrereqSubgraph(
     .first<{ ast_json: string | null }>();
 
   return {
+    term,
     nodes,
     edges,
     roots: [start],

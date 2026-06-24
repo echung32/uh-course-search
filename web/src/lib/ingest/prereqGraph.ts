@@ -110,7 +110,7 @@ export async function buildPrereqGraph(
     return s;
   }
 
-  interface CourseRow { campus: string; course_id: string; raw: string; ast: string; noncourse: string | null; }
+  interface CourseRow { campus: string; course_id: string; ast: string; noncourse: string | null; }
   interface EdgeRow {
     campus: string; prereq_course_id: string; course_id: string;
     group_index: number; alt_index: number;
@@ -131,7 +131,6 @@ export async function buildPrereqGraph(
     courseRows.push({
       campus: oc.campus,
       course_id: oc.course_id,
-      raw: oc.raw,
       ast: JSON.stringify(ast),
       noncourse: nonCourse.length ? JSON.stringify([...new Set(nonCourse)]) : null,
     });
@@ -161,9 +160,9 @@ export async function buildPrereqGraph(
   for (const part of chunk(courseRows, INSERT_CHUNK)) {
     const stmts: D1PreparedStatement[] = part.map((r) =>
       db.prepare(
-        `INSERT INTO course_prereq (term, campus, course_id, raw_text, ast_json, noncourse_json, synced_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(term, r.campus, r.course_id, r.raw, r.ast, r.noncourse, nowMs)
+        `INSERT INTO course_prereq (term, campus, course_id, ast_json, noncourse_json, synced_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(term, r.campus, r.course_id, r.ast, r.noncourse, nowMs)
     );
     if (stmts.length) await db.batch(stmts);
   }
@@ -188,6 +187,38 @@ export async function buildPrereqGraph(
   };
 }
 
+/**
+ * The single term whose prereq graph we build + serve: the newest non-view-only
+ * **primary** term, i.e. excluding Extension/Apprenticeship/Accelerated sub-terms
+ * (mirrors classifyTerm's `special` rule). Prereqs are catalog-level and
+ * effectively identical across a cycle's Summer/Fall/extension terms, and the
+ * read path only ever serves one graph — so building every active term is ~4x the
+ * storage and daily writes for no benefit, and would make the newest-by-code term
+ * an Extension term. Falls back to the newest non-view-only term if none qualify.
+ */
+export async function getPrimaryActiveTerm(db: D1Like): Promise<string | null> {
+  const primary = await db
+    .prepare(
+      `SELECT code FROM term
+        WHERE is_view_only = 0
+          AND description NOT LIKE '%Extension%'
+          AND description NOT LIKE '%Apprenticeship%'
+          AND description NOT LIKE '%Accelerated%'
+        ORDER BY code DESC LIMIT 1`
+    )
+    .first<{ code: string }>();
+  if (primary?.code) return primary.code;
+  const newest = await db
+    .prepare("SELECT code FROM term WHERE is_view_only = 0 ORDER BY code DESC LIMIT 1")
+    .first<{ code: string }>();
+  return newest?.code ?? null;
+}
+
+/**
+ * Build prereq graphs. With explicit `terms`, builds exactly those. Otherwise
+ * builds only the single primary active term (see getPrimaryActiveTerm) — not
+ * every non-view-only term.
+ */
 export async function buildAllPrereqGraphs(
   db: D1Like,
   opts: { terms?: string[]; log?: (m: string) => void; nowMs?: number } = {}
@@ -196,15 +227,13 @@ export async function buildAllPrereqGraphs(
   const now = opts.nowMs ?? Date.now();
   let codes = opts.terms;
   if (!codes || codes.length === 0) {
-    const { results } = await db
-      .prepare("SELECT code FROM term WHERE is_view_only = 0 ORDER BY code DESC")
-      .all<{ code: string }>();
-    codes = results.map((r) => r.code);
+    const primary = await getPrimaryActiveTerm(db);
+    codes = primary ? [primary] : [];
   }
   const out: PrereqBuildSummary[] = [];
   for (const code of codes) {
     const s = await buildPrereqGraph(db, code, now);
-    log(`[prereqs] ${code}: ${s.coursesWithPrereqs}/${s.courseRows} courses resolved ≥1 edge, ${s.edgeRows} edges, ${s.nonCourseLeaves} non-course leaves`);
+    log(`[prereqs] built ${code}: ${s.coursesWithPrereqs}/${s.courseRows} courses resolved ≥1 edge, ${s.edgeRows} edges, ${s.nonCourseLeaves} non-course leaves`);
     out.push(s);
   }
   return out;

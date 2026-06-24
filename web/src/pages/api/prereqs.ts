@@ -18,7 +18,7 @@ async function handle(request: Request): Promise<Response> {
   const term = url.searchParams.get("term") ?? undefined;
 
   if (!course || !campus) {
-    return new Response(JSON.stringify({ nodes: [], edges: [], roots: [], ast: null }), {
+    return new Response(JSON.stringify({ term: "", nodes: [], edges: [], roots: [], ast: null }), {
       status: 200, headers: { "Content-Type": "application/json" },
     });
   }

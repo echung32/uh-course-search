@@ -3,7 +3,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { getDb, getAnalyticsDb } from "@/lib/db/binding";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { computeTermRollups } from "@/lib/ingest/rollups";
-import { buildPrereqGraph } from "@/lib/ingest/prereqGraph";
+import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
 import {
   DEFAULT_SUBJECTS_PER_SESSION,
   enumerateSyncSubjects,
@@ -149,14 +149,14 @@ export class RefreshWorkflow extends WorkflowEntrypoint {
         computeTermRollups(getDb(), getAnalyticsDb(), code, Date.now())
       );
 
-      // Rebuild the prerequisite graph for this term (cheap: read course rows +
-      // parse; small delete-and-replace). Reads only the search DB.
-      await step.do(`prereqs ${code}`, STEP_OPTS, async () =>
-        buildPrereqGraph(getDb(), code, Date.now())
-      );
-
       // Pace before next term.
       await step.sleep(`pace after ${code}`, "5 seconds");
     }
+
+    // Rebuild the prerequisite graph ONCE, for the single primary active term
+    // (newest non-extension term). Prereqs are catalog-level and ~identical
+    // across a cycle's terms, and the read path serves only one graph — so this
+    // avoids ~4x redundant storage + daily writes across the active terms.
+    await step.do("prereqs", STEP_OPTS, async () => buildAllPrereqGraphs(getDb()));
   }
 }

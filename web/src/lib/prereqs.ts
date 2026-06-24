@@ -18,10 +18,22 @@ export async function fetchPrereqGraph(args: {
 }): Promise<PrereqSubgraph> {
   const db = getDb();
   const term = args.term ?? (await getCurrentPrereqTerm(db));
-  if (!term) return { nodes: [], edges: [], roots: [], ast: null };
+  if (!term) return { term: "", nodes: [], edges: [], roots: [], ast: null };
   return getPrereqSubgraph(db, { ...args, term });
 }
 
 export function fetchCurrentPrereqTerm(): Promise<string | null> {
   return getCurrentPrereqTerm(getDb());
+}
+
+/** The served term's code + human description, for the explorer header. */
+export async function fetchCurrentPrereqTermInfo(): Promise<{ code: string; description: string } | null> {
+  const db = getDb();
+  const code = await getCurrentPrereqTerm(db);
+  if (!code) return null;
+  const row = await db
+    .prepare("SELECT description FROM term WHERE code = ?")
+    .bind(code)
+    .first<{ description: string }>();
+  return { code, description: row?.description ?? code };
 }

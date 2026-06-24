@@ -8,7 +8,7 @@ import {
   type ResolveContext,
 } from "../src/lib/prereq/resolve";
 import { localSqliteD1 } from "../src/lib/db/client";
-import { buildPrereqGraph } from "../src/lib/ingest/prereqGraph";
+import { buildPrereqGraph, getPrimaryActiveTerm } from "../src/lib/ingest/prereqGraph";
 import { getPrereqSubgraph } from "../src/lib/db/prereqQueries";
 
 test("normalizeSubjectDescription decodes HTML entities and collapses whitespace", () => {
@@ -132,6 +132,27 @@ test.describe("prereq builder", () => {
   test.describe.configure({ mode: "serial" });
   test.beforeEach(({ browserName }, testInfo) => {
     testInfo.skip(browserName !== "chromium");
+  });
+
+  test("getPrimaryActiveTerm picks the newest non-extension active term", async () => {
+    const db = localSqliteD1();
+    const codes = ["991640", "991643", "991710", "991713"]; // Summer, Summer Ext, Fall, Fall Ext
+    for (const c of codes) await db.prepare("DELETE FROM term WHERE code = ?").bind(c).run();
+    const rows: Array<[string, string]> = [
+      ["991640", "Summer 2099"],
+      ["991643", "Summer 2099 Extension"],
+      ["991710", "Fall 2099"],
+      ["991713", "Fall 2099 Extension"], // newest by code, but an Extension → must be skipped
+    ];
+    for (const [code, desc] of rows) {
+      await db
+        .prepare("INSERT INTO term (code, description, is_view_only, display_order) VALUES (?,?,0,0)")
+        .bind(code, desc)
+        .run();
+    }
+    // Newest by code is 991713 (Fall Ext); primary must be 991710 (Fall, non-extension).
+    expect(await getPrimaryActiveTerm(db)).toBe("991710");
+    for (const c of codes) await db.prepare("DELETE FROM term WHERE code = ?").bind(c).run();
   });
 
   test("buildPrereqGraph emits edges with offered/dangling flags", async () => {
