@@ -1,17 +1,27 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import { PrereqApp } from "../components/prereq/PrereqApp";
-import { fetchCampuses } from "../lib/analytics";
+import { fetchCampuses, fetchCourseOptions } from "../lib/analytics";
 
 const url = new URL(Astro.request.url);
 const initialCourse = (url.searchParams.get("course") ?? "").toUpperCase().replace(/\s+/g, "");
 const initialCampus = url.searchParams.get("campus") ?? "";
 
 let campuses: string[] = [];
+let courses: Array<{ value: string; label: string }> = [];
 try {
-  campuses = await fetchCampuses();
+  const [campusList, courseOptions] = await Promise.all([
+    fetchCampuses(),
+    fetchCourseOptions(),
+  ]);
+  campuses = campusList;
+  // subjectCourse is "ICS 311"; the graph node id is the space-stripped "ICS311".
+  courses = courseOptions.map((c) => ({
+    value: c.subjectCourse.replace(/\s+/g, ""),
+    label: c.subjectCourse,
+  }));
 } catch (err) {
-  console.error("Failed to load prereq page campuses:", err);
+  console.error("Failed to load prereq page data:", err);
 }
 ---
 
@@ -23,6 +33,12 @@ try {
         Trace the pathway to a class — what it requires, and what it unlocks.
       </p>
     </div>
-    <PrereqApp client:only="react" campuses={campuses} initialCourse={initialCourse} initialCampus={initialCampus} />
+    <PrereqApp
+      client:only="react"
+      campuses={campuses}
+      courses={courses}
+      initialCourse={initialCourse}
+      initialCampus={initialCampus}
+    />
   </div>
 </Layout>

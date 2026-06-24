@@ -6,14 +6,18 @@
 import dagre from "dagre";
 import type { GraphNode, GraphEdge } from "@/lib/db/prereqQueries";
 
-const NODE_W = 160;
-const NODE_H = 52;
+// Kept in sync with the rendered node box in PrereqApp (CourseNode).
+export const NODE_W = 184;
+export const NODE_H = 64;
 
 export interface Positioned { id: string; x: number; y: number; }
 
 export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[]): Positioned[] {
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: "BT", nodesep: 40, ranksep: 70 });
+  // Generous separation so dense alternative-heavy graphs (e.g. ICS 311) don't
+  // collapse into an unreadable hairball. `ranksep` spreads the layers; `nodesep`
+  // spreads siblings within a layer.
+  g.setGraph({ rankdir: "BT", nodesep: 64, ranksep: 110, marginx: 16, marginy: 16 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
   for (const e of edges) if (e.from !== e.to) g.setEdge(e.from, e.to);
