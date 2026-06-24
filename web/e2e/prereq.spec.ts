@@ -215,3 +215,52 @@ test("layoutGraph assigns distinct positions to a 2-node chain", () => {
   const b = positioned.find((p) => p.id === "ICS211")!;
   expect(a.x === b.x && a.y === b.y).toBe(false); // dagre separated them
 });
+
+// ---------------------------------------------------------------------------
+// Read-path e2e: seeded fixture (term 202710, ICS 111/211/311 at Manoa)
+// Graph is built during global-setup (buildPrereqGraph called after seed).
+// ---------------------------------------------------------------------------
+
+test("read-path: /api/prereqs returns the ICS 311 → 211 → 111 chain", async ({ request }) => {
+  const res = await request.get(
+    "/api/prereqs?course=ICS311&campus=" + encodeURIComponent("University of Hawaii at Manoa") + "&direction=prereqs&depth=3"
+  );
+  expect(res.ok()).toBeTruthy();
+  const g = await res.json();
+  const ids = g.nodes.map((n: { id: string }) => n.id).sort();
+  expect(ids).toEqual(expect.arrayContaining(["ICS111", "ICS211", "ICS311"]));
+  expect(g.edges).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ from: "ICS211", to: "ICS311" }),
+      expect.objectContaining({ from: "ICS111", to: "ICS211" }),
+    ])
+  );
+});
+
+test("read-path: /prereqs page renders the canvas", async ({ page }) => {
+  await page.goto("/prereqs?course=ICS311&campus=" + encodeURIComponent("University of Hawaii at Manoa"));
+  await expect(page.getByTestId("prereq-canvas")).toBeVisible();
+  await expect(page.getByText("ICS 311")).toBeVisible({ timeout: 10000 });
+});
+
+// ---------------------------------------------------------------------------
+// Ingestion e2e: POST /api/admin/prereqs rebuilds the graph (chromium-only,
+// mutates D1 — gate mirrors the "prereq builder" describe above).
+// ---------------------------------------------------------------------------
+
+test.describe("prereq ingestion", () => {
+  test.describe.configure({ mode: "serial" });
+  test.beforeEach(({ browserName }, testInfo) => {
+    testInfo.skip(browserName !== "chromium");
+  });
+
+  test("ingestion: POST /api/admin/prereqs rebuilds the graph", async ({ request }) => {
+    const res = await request.post("/api/admin/prereqs?term=202710", {
+      headers: { "x-admin-secret": "e2e-admin-secret", "Content-Type": "application/json" },
+      data: {},
+    });
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+  });
+});

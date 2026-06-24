@@ -140,7 +140,7 @@ SECTIONS[3].meetingsFaculty = [
   },
 ];
 
-export default function globalSetup() {
+export default async function globalSetup() {
   // Ensure the local D1 file exists with the current schema (idempotent).
   execSync(
     `yarn wrangler d1 migrations apply uh-course-search-db --local --persist-to ${E2E_PERSIST}`,
@@ -262,9 +262,18 @@ export default function globalSetup() {
   const courseStmt = db.prepare(
     `INSERT INTO course
        (term, campus_description, subject, course_number, college_code, college_name,
-        department, department_code, grading_modes, schedule_types, credit_breakdown, synced_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        department, department_code, grading_modes, schedule_types, credit_breakdown, prerequisites, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
+  const PREREQ: Record<string, string | null> = {
+    "111": null,
+    "141": null,
+    // NOTE: uses "Information & Computer Sciences" (with space before &) to match the
+    // fixture's subjectDescription field — so loadSubjectMap resolves the ref correctly.
+    "211": "Prerequisites:ICS 111\n(\nCourse or Test: Information & Computer Sciences 111\nMinimum Grade of C\nMay not be taken concurrently.\n)",
+    "311": "Prerequisites:ICS 211\n(\nCourse or Test: Information & Computer Sciences 211\nMinimum Grade of C\nMay not be taken concurrently.\n)",
+    "101": null,
+  };
   for (const [campus, subject, courseNumber, collegeCode, collegeName] of COURSES) {
     courseStmt.run(
       "202710",
@@ -278,6 +287,7 @@ export default function globalSetup() {
       JSON.stringify(["Letter Plus + Minus  G"]),
       JSON.stringify(["Lecture  LEC"]),
       JSON.stringify({ creditHours: 3 }),
+      PREREQ[courseNumber] ?? null,
       now
     );
   }
@@ -499,4 +509,13 @@ export default function globalSetup() {
   adb.close();
 
   db.close();
+
+  // Build the prereq graph for the seeded backfilled term (read-path fixture).
+  // Must run AFTER db.close() so node:sqlite releases the file handle first.
+  // Use the e2e persist file (same one globalSetup just seeded) via localSqliteD1
+  // with an explicit path — not the default .wrangler/state dev file.
+  const e2eDbFile = findLocalD1File("course_section");
+  const { localSqliteD1 } = await import("../src/lib/db/client");
+  const { buildPrereqGraph } = await import("../src/lib/ingest/prereqGraph");
+  await buildPrereqGraph(localSqliteD1(e2eDbFile), "202710");
 }
