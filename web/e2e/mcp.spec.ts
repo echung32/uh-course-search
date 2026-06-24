@@ -27,11 +27,11 @@ test("initialize returns capabilities, serverInfo, and instructions", async ({ r
   expect(body.result.protocolVersion).toBeTruthy();
 });
 
-test("tools/list returns the six search tools", async ({ request }) => {
+test("tools/list returns the search and prereq tools", async ({ request }) => {
   const { body } = await rpc(request, { jsonrpc: "2.0", id: 1, method: "tools/list" });
   const names = body.result.tools.map((t: { name: string }) => t.name).sort();
   expect(names).toEqual(
-    ["get_course", "get_instructor", "get_section", "list_filters", "list_terms", "search_sections"]
+    ["get_course", "get_instructor", "get_prereq_graph", "get_section", "list_filters", "list_terms", "search_sections"].sort()
   );
 });
 
