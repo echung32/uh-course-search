@@ -34,6 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge, PrereqSubgraph } from "@/lib/db/prereqQueries";
 
@@ -81,6 +82,31 @@ function CourseNode({ data }: NodeProps) {
 
 const nodeTypes = { course: CourseNode };
 
+/** Masks the canvas while a graph is being fetched. A handful of node-shaped
+ *  blocks loosely arranged like a DAG hints at what's loading in. */
+function GraphSkeleton() {
+  // (x%, y%) placements for placeholder nodes, suggesting a few tiers of a graph.
+  const blocks = [
+    { left: "44%", top: "8%" },
+    { left: "22%", top: "38%" },
+    { left: "66%", top: "38%" },
+    { left: "10%", top: "70%" },
+    { left: "40%", top: "70%" },
+    { left: "72%", top: "70%" },
+  ];
+  return (
+    <div className="relative h-full w-full bg-muted/20" aria-busy="true" aria-label="Loading graph">
+      {blocks.map((b, i) => (
+        <Skeleton
+          key={i}
+          className="absolute h-12"
+          style={{ left: b.left, top: b.top, width: NODE_W }}
+        />
+      ))}
+    </div>
+  );
+}
+
 /** "ICS311" + subject "ICS" → "ICS 311" (the catalog display number, not the
  *  campus-suffixed stored course_number). */
 function displayCode(n: GraphNode): string {
@@ -113,6 +139,8 @@ function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
 
   const [graph, setGraph] = useState<PrereqSubgraph | null>(null);
   const [loading, setLoading] = useState(false);
+  // Wall-clock ms for the most recent /api/prereqs fetch, shown beside the legend.
+  const [loadMs, setLoadMs] = useState<number | null>(null);
 
   // Follow the app's theme (ThemeToggle flips `.dark` on <html>) so React Flow's
   // canvas/controls/edges switch with it. Without this the canvas stays light.
@@ -129,14 +157,19 @@ function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
   useEffect(() => {
     if (!course || !campus) {
       setGraph(null);
+      setLoadMs(null);
       return;
     }
     setLoading(true);
+    const start = performance.now();
     const params = new URLSearchParams({ course, campus, direction, depth: String(depth) });
     fetch(`/api/prereqs?${params}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((g: PrereqSubgraph | null) => setGraph(g))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoadMs(performance.now() - start);
+        setLoading(false);
+      });
   }, [course, campus, direction, depth]);
 
   const campusOptions: ComboboxOption[] = useMemo(
@@ -246,7 +279,9 @@ function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
       </div>
 
       <div className="h-[620px] overflow-hidden rounded-md border" data-testid="prereq-canvas">
-        {graph && graph.nodes.length > 0 ? (
+        {loading ? (
+          <GraphSkeleton />
+        ) : graph && graph.nodes.length > 0 ? (
           <ReactFlow
             key={graphKey}
             colorMode={colorMode}
@@ -267,7 +302,7 @@ function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
           </ReactFlow>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {loading ? "Loading…" : "No prerequisite data for this course."}
+            {course ? "No prerequisite data for this course." : "Select a course to explore its prerequisites."}
           </div>
         )}
       </div>
@@ -282,6 +317,11 @@ function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
           one of (alternatives)
         </span>
         <span>Arrows point toward the course they unlock. Click a node to re-center; drag to rearrange.</span>
+        {loadMs != null && !loading && (
+          <span className="ml-auto tabular-nums" title="Time to fetch this graph">
+            loaded in {Math.round(loadMs)} ms
+          </span>
+        )}
       </div>
     </div>
   );
