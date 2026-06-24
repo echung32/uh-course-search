@@ -46,6 +46,26 @@ test("parsePrereqText dedups Banner's redundant OR-branches", () => {
   expect(parsed.blocks[0].groups[0].conditions[0].concurrent).toBe("no");
 });
 
+test("parsePrereqText terminates on flat multi-block prereqs (no parens) — infinite-loop guard", () => {
+  // Banner emits flat prereqs (e.g. AERO 134): multiple "Prerequisites:" blocks
+  // with the conditions NOT wrapped in ( ). Such a block has 0 groups AND 0 ops,
+  // which made the trailing-ops trim loop spin forever (0 >= 0). This must return.
+  const raw = [
+    "Area Prerequisites",
+    'Prerequisites:AERO 130 Completed with "C"',
+    "Course or Test: Aeronautics 130",
+    "Minimum Grade of C",
+    "May not be taken concurrently.",
+    'Prerequisites:AERO 131 Completed with "C"',
+    "Course or Test: Aeronautics 131",
+    "Minimum Grade of C",
+    "May not be taken concurrently.",
+  ].join("\n");
+  const parsed = parsePrereqText(raw); // pre-fix: hangs at 100% CPU forever
+  expect(parsed.blocks).toHaveLength(2);
+  expect(parsed.blocks.every((b) => b.groups.length === 0 && b.ops.length === 0)).toBe(true);
+});
+
 test("splitCourseRef separates trailing course number (incl. letter suffix)", () => {
   expect(splitCourseRef("Information& Computer Sciences 241")).toEqual({
     description: "Information& Computer Sciences",

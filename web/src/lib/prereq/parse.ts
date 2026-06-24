@@ -115,9 +115,12 @@ export function parsePrereqText(raw: string): ParsedPrereqs {
     i++;
   }
 
-  // Trim any trailing ops left from dedup
+  // Trim any trailing ops left from dedup. The `ops.length > 0` guard is load-
+  // bearing: a flat block with no parenthesized groups has ops.length === 0 AND
+  // groups.length === 0, so `0 >= 0` would loop forever popping an empty array
+  // (Banner emits such flat multi-block prereqs, e.g. AERO 134).
   for (const block of blocks) {
-    while (block.ops.length >= block.groups.length) block.ops.pop();
+    while (block.ops.length > 0 && block.ops.length >= block.groups.length) block.ops.pop();
   }
 
   return { label, blocks };
