@@ -35,6 +35,13 @@ test("tools/list returns the search and prereq tools", async ({ request }) => {
   );
 });
 
+test("get_prereq_graph is registered with required course and campus fields", async ({ request }) => {
+  const { body } = await rpc(request, { jsonrpc: "2.0", id: 1, method: "tools/list" });
+  const prereqTool = body.result.tools.find((t: { name: string }) => t.name === "get_prereq_graph");
+  expect(prereqTool).toBeTruthy();
+  expect(prereqTool.inputSchema.required).toEqual(expect.arrayContaining(["course", "campus"]));
+});
+
 test("list_terms includes the seeded term 202710", async ({ request }) => {
   const { body } = await rpc(request, call("list_terms"));
   const terms = payload(body.result);

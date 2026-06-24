@@ -1,5 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { TOOLS } from "../src/lib/mcp/tools";
 import { parsePrereqText } from "../src/lib/prereq/parse";
 import {
   splitCourseRef,
@@ -9,12 +8,6 @@ import {
 import { localSqliteD1 } from "../src/lib/db/client";
 import { buildPrereqGraph } from "../src/lib/ingest/prereqGraph";
 import { getPrereqSubgraph } from "../src/lib/db/prereqQueries";
-
-test("get_prereq_graph tool is registered with required course/campus", () => {
-  const tool = TOOLS.find((t) => t.name === "get_prereq_graph");
-  expect(tool).toBeTruthy();
-  expect(tool!.inputSchema.required).toEqual(expect.arrayContaining(["course", "campus"]));
-});
 
 test("parsePrereqText dedups Banner's redundant OR-branches", () => {
   const raw = [
