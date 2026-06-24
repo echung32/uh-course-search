@@ -95,13 +95,15 @@ interface PrereqAppProps {
 
 function PrereqExplorer({ campuses, courses }: PrereqAppProps) {
   // URL-backed state (nuqs) so every view is shareable and the back button works.
-  // Defaults (both / depth 2) are omitted from the URL by nuqs, keeping it clean.
+  // Defaults (both / depth 1) are omitted from the URL by nuqs, keeping it clean.
+  // Depth 1 keeps the default view to immediate neighbours, which is far easier to
+  // read; users opt into deeper graphs via the Depth select.
   const [q, setQ] = useQueryStates(
     {
       course: parseAsString.withDefault(""),
       campus: parseAsString.withDefault(campuses[0] ?? ""),
       direction: parseAsStringLiteral(["prereqs", "unlocks", "both"] as const).withDefault("both"),
-      depth: parseAsInteger.withDefault(2),
+      depth: parseAsInteger.withDefault(1),
     },
     { history: "push" }
   );
