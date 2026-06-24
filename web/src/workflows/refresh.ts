@@ -3,6 +3,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { getDb, getAnalyticsDb } from "@/lib/db/binding";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { computeTermRollups } from "@/lib/ingest/rollups";
+import { buildPrereqGraph } from "@/lib/ingest/prereqGraph";
 import {
   DEFAULT_SUBJECTS_PER_SESSION,
   enumerateSyncSubjects,
@@ -146,6 +147,12 @@ export class RefreshWorkflow extends WorkflowEntrypoint {
       // + a small delete-and-replace; nowhere near the 10-min step limit).
       await step.do(`rollups ${code}`, STEP_OPTS, async () =>
         computeTermRollups(getDb(), getAnalyticsDb(), code, Date.now())
+      );
+
+      // Rebuild the prerequisite graph for this term (cheap: read course rows +
+      // parse; small delete-and-replace). Reads only the search DB.
+      await step.do(`prereqs ${code}`, STEP_OPTS, async () =>
+        buildPrereqGraph(getDb(), code, Date.now())
       );
 
       // Pace before next term.
