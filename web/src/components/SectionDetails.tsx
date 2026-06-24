@@ -155,34 +155,45 @@ function PrereqDisplay({ text }: { text: string }) {
   );
 }
 
-function PrereqSection({ title, text }: { title: string; text: string }) {
+function PrereqSection({ title, text, subjectCourse, campusDescription }: { title: string; text: string; subjectCourse: string; campusDescription: string | null }) {
   const [showRaw, setShowRaw] = useState(false);
   // Promote Banner's label (almost always "Area Prerequisites") to the heading.
   const { label } = parsePrereqText(text);
   const heading = label ?? title;
   const tip = showRaw ? "Show formatted" : "Show raw source";
+  const courseId = (subjectCourse ?? "").replace(/\s+/g, "");
   return (
     <Section
       title={heading}
       action={
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => setShowRaw((v) => !v)}
-                aria-pressed={showRaw}
-                aria-label={tip}
-                className={`cursor-pointer rounded p-0.5 hover:text-foreground ${
-                  showRaw ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <Code className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>{tip}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center gap-1.5">
+          {courseId && campusDescription && (
+            <a
+              href={`/prereqs?course=${encodeURIComponent(courseId)}&campus=${encodeURIComponent(campusDescription)}`}
+              className="text-xs text-blue-600 underline decoration-dotted hover:text-blue-800 dark:text-blue-400"
+            >
+              View prereq graph
+            </a>
+          )}
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setShowRaw((v) => !v)}
+                  aria-pressed={showRaw}
+                  aria-label={tip}
+                  className={`cursor-pointer rounded p-0.5 hover:text-foreground ${
+                    showRaw ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  <Code className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{tip}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       }
     >
       {showRaw ? (
@@ -299,10 +310,10 @@ export function SectionDetails({
         </Section>
 
         {catalog?.prerequisites && (
-          <PrereqSection title="Prerequisites" text={catalog.prerequisites} />
+          <PrereqSection title="Prerequisites" text={catalog.prerequisites} subjectCourse={section.subjectCourse} campusDescription={section.campusDescription} />
         )}
         {catalog?.corequisites && (
-          <PrereqSection title="Corequisites" text={catalog.corequisites} />
+          <PrereqSection title="Corequisites" text={catalog.corequisites} subjectCourse={section.subjectCourse} campusDescription={section.campusDescription} />
         )}
 
         {(catalog?.collegeName || catalog?.department) && (

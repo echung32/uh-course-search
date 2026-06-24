@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { layoutGraph } from "../src/components/prereq/layout";
 import { parsePrereqText } from "../src/lib/prereq/parse";
 import {
   splitCourseRef,
@@ -201,4 +202,16 @@ test.describe("prereq builder", () => {
       await db.prepare(`DELETE FROM ${t} WHERE term = ?`).bind(term).run();
     }
   });
+});
+
+test("layoutGraph assigns distinct positions to a 2-node chain", () => {
+  const positioned = layoutGraph(
+    [{ id: "ICS111", subject: "ICS", number: "111", title: null, offered: true },
+     { id: "ICS211", subject: "ICS", number: "211", title: null, offered: true }],
+    [{ from: "ICS111", to: "ICS211", groupIndex: 0, altIndex: 0, grade: "C", concurrent: "no" }]
+  );
+  expect(positioned).toHaveLength(2);
+  const a = positioned.find((p) => p.id === "ICS111")!;
+  const b = positioned.find((p) => p.id === "ICS211")!;
+  expect(a.x === b.x && a.y === b.y).toBe(false); // dagre separated them
 });
