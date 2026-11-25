@@ -140,6 +140,57 @@ SECTIONS[3].meetingsFaculty = [
   },
 ];
 
+// ICS 311 sec 001: three meetings for the Schedule column — an in-range weekly
+// lecture, an online-async component, and a one-day meeting outside the term's
+// usual range (08/25/2025–12/12/2025, set on term 202710 below), which alone
+// gets a date line.
+function fixtureMeeting(overrides: Record<string, unknown>) {
+  return {
+    bannerId: null,
+    category: null,
+    courseReferenceNumber: "10005",
+    displayName: null,
+    emailAddress: null,
+    primaryIndicator: false,
+    term: "202710",
+    meetingTime: {
+      beginTime: null,
+      endTime: null,
+      startDate: "08/25/2025",
+      endDate: "12/12/2025",
+      building: null,
+      buildingDescription: null,
+      campus: null,
+      campusDescription: null,
+      room: null,
+      creditHourSession: null,
+      hoursWeek: null,
+      meetingScheduleType: null,
+      meetingType: null,
+      meetingTypeDescription: "Lecture",
+      monday: false,
+      tuesday: false,
+      wednesday: false,
+      thursday: false,
+      friday: false,
+      saturday: false,
+      sunday: false,
+      ...overrides,
+    },
+  };
+}
+SECTIONS[4].meetingsFaculty = [
+  fixtureMeeting({
+    beginTime: "1030", endTime: "1120", building: "POST", room: "318A",
+    monday: true, wednesday: true, friday: true,
+  }),
+  fixtureMeeting({ building: "ONLINE", room: "ASYNC" }),
+  fixtureMeeting({
+    beginTime: "1800", endTime: "1950", building: "KELLER", room: "101",
+    startDate: "09/02/2025", endDate: "09/02/2025", tuesday: true,
+  }),
+];
+
 export default async function globalSetup() {
   // Ensure the local D1 file exists with the current schema (idempotent).
   execSync(
