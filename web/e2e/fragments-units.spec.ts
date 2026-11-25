@@ -456,4 +456,60 @@ test.describe("lazy course text", () => {
     expect(row.prereq_synced_at).not.toBeNull();
     expect(row.description).toBe("Existing description");
   });
+
+  test("course panel fetches description as well as prereqs when both are missing", async () => {
+    const { syncTerm } = await import("../src/lib/ingest/sync");
+    const { ensureCourseText } = await import("../src/lib/ingest/courseTextLazy");
+    const { __resetLazySlots } = await import("../src/lib/ingest/lazyLimit");
+    __resetLazySlots();
+    await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+    f = freshSearchDb();
+    expect((await syncTerm(f.db, FRAG_TERM, { subjectDelayMs: 0 })).status).toBe("ok");
+    f.raw
+      .prepare(
+        "INSERT INTO course (term, campus_description, subject, course_number, synced_at) VALUES (?, 'Manoa', 'ICS', '111', 1)"
+      )
+      .run(FRAG_TERM);
+    await ensureCourseText(f.db, FRAG_TERM, "Manoa", "ICS", "111");
+    const row = f.raw
+      .prepare("SELECT description, prereq_synced_at FROM course WHERE term = ? AND course_number = '111'")
+      .get(FRAG_TERM) as { description: string | null; prereq_synced_at: number | null };
+    expect(row.description).not.toBeNull();
+    expect(row.prereq_synced_at).not.toBeNull();
+  });
+
+  test("a Banner outage makes lazy fetches resolve null and cache nothing", async () => {
+    const { syncTerm } = await import("../src/lib/ingest/sync");
+    const { ensureCourseText } = await import("../src/lib/ingest/courseTextLazy");
+    const { ensureSectionDetail } = await import("../src/lib/ingest/sectionLazy");
+    const { __resetLazySlots } = await import("../src/lib/ingest/lazyLimit");
+    __resetLazySlots();
+    await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+    f = freshSearchDb();
+    expect((await syncTerm(f.db, FRAG_TERM, { subjectDelayMs: 0 })).status).toBe("ok");
+    f.raw
+      .prepare(
+        "INSERT INTO course (term, campus_description, subject, course_number, synced_at) VALUES (?, 'Manoa', 'ICS', '111', 1)"
+      )
+      .run(FRAG_TERM);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error("ECONNREFUSED"))) as typeof fetch;
+    try {
+      const sec = await ensureSectionDetail(f.db, FRAG_TERM, "10001", {
+        restrictions: true,
+        extras: true,
+        crossList: true,
+      });
+      const course = await ensureCourseText(f.db, FRAG_TERM, "Manoa", "ICS", "111");
+      expect(sec).toBeNull();
+      expect(course).toBeNull();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(f.raw.prepare("SELECT COUNT(*) AS n FROM section_detail WHERE term = ?").get(FRAG_TERM)).toEqual({ n: 0 });
+    const row = f.raw
+      .prepare("SELECT prereq_synced_at FROM course WHERE term = ? AND course_number = '111'")
+      .get(FRAG_TERM) as { prereq_synced_at: number | null };
+    expect(row.prereq_synced_at).toBeNull();
+  });
 });

@@ -166,7 +166,13 @@ export async function ensureSectionDetail(
   const promise = (async () => {
     if (!(await sectionExists(db, term, crn))) return null;
     if (!tryTakeLazySlot()) return null;
-    return fetchAndStore(db, term, crn, missing);
+    try {
+      return await fetchAndStore(db, term, crn, missing);
+    } catch (err) {
+      // Banner outage / session failure: nothing cached; callers serve stored data.
+      console.warn(`Section detail: live fetch failed for ${term}:${crn}: ${(err as Error).message}`);
+      return null;
+    }
   })().finally(() => inFlight.delete(key));
   inFlight.set(key, promise);
   return promise;

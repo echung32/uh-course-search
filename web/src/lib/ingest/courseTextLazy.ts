@@ -137,7 +137,13 @@ export async function ensureCourseText(
     subject,
     courseNumber,
     row.description == null
-  ).finally(() => inFlight.delete(key));
+  )
+    .catch((err: Error) => {
+      // Banner outage / session failure: nothing cached; caller keeps its row.
+      console.warn(`Course text: live fetch failed for ${term}/${subject} ${courseNumber}: ${err.message}`);
+      return null;
+    })
+    .finally(() => inFlight.delete(key));
   inFlight.set(key, promise);
   return promise;
 }
