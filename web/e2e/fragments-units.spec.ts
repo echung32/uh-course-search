@@ -42,9 +42,16 @@ const facts: CourseFacts = {
   description: null,
 };
 
-test("0015 backfills fragment timestamps from synced_at", () => {
+test("0015 backfills fragment timestamps only for fragments that were fetched", () => {
   f = freshSearchDb({ upTo: "0014" });
-  f.raw.prepare("INSERT INTO section_detail (term, crn, synced_at) VALUES (?, '1', 111)").run(TERM);
+  const sd = f.raw.prepare(
+    `INSERT INTO section_detail (term, crn, raw_restrictions_html, raw_fees_html, raw_linked_html,
+                                 raw_syllabus_html, raw_xlst_html, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 111)`
+  );
+  sd.run(TERM, "1", "<r/>", "<f/>", "<l/>", "<s/>", "<x/>"); // every fragment fetched
+  sd.run(TERM, "2", null, "<f/>", null, "<s/>", null); // partial row: extras incomplete
+  sd.run(TERM, "3", null, null, null, null, null); // nothing fetched
   const ins = f.raw.prepare(
     `INSERT INTO course (term, campus_description, subject, course_number, raw_prereq_html, synced_at)
      VALUES (?, 'C', 'ICS', ?, ?, 222)`
@@ -52,12 +59,30 @@ test("0015 backfills fragment timestamps from synced_at", () => {
   ins.run(TERM, "111", "<p/>");
   ins.run(TERM, "222", null);
   f.applyRest();
-  const sd = f.raw.prepare("SELECT * FROM section_detail WHERE crn = '1'").get() as Record<string, number>;
-  expect([sd.restrictions_synced_at, sd.extras_synced_at, sd.crosslist_synced_at]).toEqual([111, 111, 111]);
+  const stamps = f.raw
+    .prepare("SELECT crn, restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x FROM section_detail ORDER BY crn")
+    .all() as Array<Record<string, unknown>>;
+  expect(stamps).toEqual([
+    { crn: "1", r: 111, e: 111, x: 111 },
+    { crn: "2", r: null, e: null, x: null },
+    { crn: "3", r: null, e: null, x: null },
+  ]);
   const c = f.raw.prepare("SELECT * FROM course ORDER BY course_number").all() as Record<string, unknown>[];
   expect(c.map((r) => r.facts_synced_at)).toEqual([222, 222]);
   expect(c.map((r) => r.facts_source)).toEqual(["banner", "banner"]);
   expect(c.map((r) => r.prereq_synced_at)).toEqual([222, null]);
+});
+
+test("upsertCourseFacts keeps stored credits when the incoming creditHours is null", async () => {
+  f = freshSearchDb();
+  const credit = () =>
+    JSON.parse((f.raw.prepare("SELECT credit_breakdown FROM course").get() as { credit_breakdown: string }).credit_breakdown);
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { creditHours: 4 } }, "banner", 10);
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { creditHours: null } }, "crseavail", 20);
+  expect(credit()).toEqual({ creditHours: 4 });
+  // A real value still replaces it.
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { creditHours: 3 } }, "crseavail", 30);
+  expect(credit()).toEqual({ creditHours: 3 });
 });
 
 test("upsertSectionRestrictions leaves other fragments untouched", async () => {
@@ -339,7 +364,7 @@ test("captureDeadline cuts at 21:45 HST", async () => {
   // backfill.ts pulls in sis/client.ts, which reads SIS_BASE_URL at module load.
   const saved = process.env.SIS_BASE_URL;
   process.env.SIS_BASE_URL = `${MOCK}/StudentRegistrationSsb`;
-  const { captureDeadline } = await import("../src/lib/ingest/backfill");
+  const { captureDeadline, startedAfterCutoff } = await import("../src/lib/ingest/backfill");
   if (saved === undefined) delete process.env.SIS_BASE_URL;
   else process.env.SIS_BASE_URL = saved;
 
@@ -356,6 +381,11 @@ test("captureDeadline cuts at 21:45 HST", async () => {
   expect(captureDeadline(late, 180)).toBe(late + 180 * MIN);
   const cut = at("2026-11-25T21:45:00-10:00");
   expect(captureDeadline(cut, 30)).toBe(cut + 30 * MIN);
+  // The late-start warning fires from 21:45 HST to local midnight only.
+  expect(startedAfterCutoff(cut)).toBe(true);
+  expect(startedAfterCutoff(late)).toBe(true);
+  expect(startedAfterCutoff(cut - 1)).toBe(false);
+  expect(startedAfterCutoff(at("2026-11-26T00:30:00-10:00"))).toBe(false);
 });
 
 test("captureTerm finishes its sync_run as error when it throws", async () => {

@@ -30,9 +30,19 @@ const MAX_ZERO_PROGRESS_RUN = 3;
  */
 export function captureDeadline(now: number, maxMinutes: number): number {
   const budget = now + maxMinutes * MINUTE_MS;
-  const local = now - HST_OFFSET_MS;
-  const cutoff = local - (((local % DAY_MS) + DAY_MS) % DAY_MS) + CUTOFF_MS + HST_OFFSET_MS;
+  const cutoff = hstCutoff(now);
   return now < cutoff ? Math.min(budget, cutoff) : budget;
+}
+
+/** True when `now` is at/after 21:45 HST (before local midnight). Pure. */
+export function startedAfterCutoff(now: number): boolean {
+  return now >= hstCutoff(now);
+}
+
+/** Today's 21:45 HST (epoch ms) for the HST day containing `now`. */
+function hstCutoff(now: number): number {
+  const local = now - HST_OFFSET_MS;
+  return local - (((local % DAY_MS) + DAY_MS) % DAY_MS) + CUTOFF_MS + HST_OFFSET_MS;
 }
 
 export interface BackfillOptions {
@@ -85,8 +95,17 @@ export async function backfillNextTerm(
     return { term: null, done: true, remaining };
   }
 
-  const deadline = captureDeadline(Date.now(), maxMinutes);
+  const startedAt = Date.now();
+  const deadline = captureDeadline(startedAt, maxMinutes);
   log(`[capture] ${remaining} term(s) with gaps; deadline ${new Date(deadline).toISOString()}`);
+  if (startedAfterCutoff(startedAt)) {
+    // The 21:45 cut only applies to runs started before it: a late manual run
+    // gets its full budget and may still hold the shared lock at 22:00.
+    log(
+      `[capture] WARNING: started after 21:45 HST; this run may hold the shared lock past the ` +
+        `nightly refresh — pass a small --maxMinutes`
+    );
+  }
   const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log };
 
   const captures: CaptureResult[] = [];

@@ -1,17 +1,4 @@
 /**
- * Course-details ingestion (phase 2, slice 1) — the Banner-facing write path for
- * the additive endpoints. Runs AFTER a term's course_section rows exist (a full
- * sync), since the course-catalog pass enumerates the live course set from D1.
- *
- * Two passes:
- *   - filter options: the canonical `get_*` dropdown menus, per term.
- *   - course catalog: academic College/Department/grading/schedule, fetched from
- *     ONE representative CRN per (campus, course). Catalog facts are
- *     campus-specific (the same subject+course at another campus is a different
- *     catalog entry) but uniform within a campus, and have no section-override
- *     slot — so per-(campus,course) dedup is safe. See docs/plans/course-details.md.
- */
-/**
  * Course-details ingestion — the Banner-facing write path for the additive
  * detail endpoints. Runs AFTER a term's course_section rows exist (a full sync).
  * Composes the per-fragment fetchers (fragments.ts, courseFacts.ts): filter

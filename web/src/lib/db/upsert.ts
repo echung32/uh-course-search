@@ -506,7 +506,12 @@ export async function upsertCourseFacts(
            THEN COALESCE(course.grading_modes, '[]') ELSE excluded.grading_modes END,
          schedule_types = CASE WHEN excluded.schedule_types = '[]'
            THEN COALESCE(course.schedule_types, '[]') ELSE excluded.schedule_types END,
-         credit_breakdown = excluded.credit_breakdown,
+         -- Unknown incoming credits (e.g. crseavail omitted creditHrLow) never
+         -- erase stored ones.
+         credit_breakdown = CASE
+           WHEN json_extract(excluded.credit_breakdown, '$.creditHours') IS NULL
+           THEN COALESCE(course.credit_breakdown, excluded.credit_breakdown)
+           ELSE excluded.credit_breakdown END,
          description = COALESCE(excluded.description, course.description),
          facts_synced_at = excluded.facts_synced_at,
          facts_source = excluded.facts_source,
