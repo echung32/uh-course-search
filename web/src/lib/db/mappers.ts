@@ -77,9 +77,20 @@ export interface AttributeRow {
   description: string | null;
 }
 
-/** Read path: a stored row → the exact `CourseSection` Banner returned. */
+/**
+ * Read path: a stored row → the exact `CourseSection` Banner returned.
+ *
+ * The nested lists are the one place a malformed blob can take down a consumer
+ * (the results table maps over them unguarded), so a missing or non-array list
+ * is defaulted to `[]`. A well-formed Banner section always carries all three,
+ * so this never alters real data — it only keeps a bad row from crashing a page.
+ */
 export function rowToCourseSection(row: { raw_json: string }): CourseSection {
-  return JSON.parse(row.raw_json) as CourseSection;
+  const section = JSON.parse(row.raw_json) as CourseSection;
+  if (!Array.isArray(section.faculty)) section.faculty = [];
+  if (!Array.isArray(section.meetingsFaculty)) section.meetingsFaculty = [];
+  if (!Array.isArray(section.sectionAttributes)) section.sectionAttributes = [];
+  return section;
 }
 
 /** Write path: a `CourseSection` → its scalar row (+ embedded raw_json). */

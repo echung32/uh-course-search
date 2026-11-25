@@ -67,6 +67,46 @@ test("loads the course search page with a populated term", async ({ page }) => {
   await expect(page.locator("#term")).toContainText("Fall 2026");
 });
 
+test("a section stored without its nested lists still renders", async ({ page }) => {
+  // Fall 2024 (202690) is a backfill fixture whose one section is stored as a
+  // bare `{}` blob. The read path defaults the missing faculty/meeting/attribute
+  // lists, so the row renders instead of crashing the island.
+  await page.goto("/?term=202690");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+});
+
+test("a render error in the results is contained — the form survives", async ({
+  page,
+}) => {
+  // Bypass the server-side defaults with a stubbed malformed response, so the
+  // table itself throws; the boundary must keep the rest of the page alive.
+  await page.route("**/api/search?**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        totalCount: 1,
+        data: [{}],
+        pageOffset: 0,
+        pageMaxSize: 25,
+        sectionsFetchedCount: 1,
+        pathMode: "search",
+      }),
+    })
+  );
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText("couldn't be displayed");
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+
+  // A fresh (well-formed) search replaces the fallback with real results.
+  await page.unroute("**/api/search?**");
+  await pickCombobox(page, "subject", "ICS");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("subject is optional — omitting it searches all subjects", async ({ page }) => {
   // ICS only.
   await runSearch(page, "ICS", "");
