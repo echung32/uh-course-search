@@ -314,3 +314,22 @@ test("parity ignores cross-list rows that were never fetched", async () => {
   expect(r.fields.crossList.rate).toBe(1);
   expect(r.pass).toBe(true);
 });
+
+test("parity fails when crseavail is down: every unit failed and cross-list failed", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  await setMode("http500");
+  const units = (
+    f.raw
+      .prepare("SELECT COUNT(*) AS n FROM (SELECT DISTINCT campus_description, subject FROM course_section WHERE term = ?)")
+      .get(TERM) as { n: number }
+  ).n;
+  const r = await crseavailParity(f.db, TERM);
+  expect(units).toBeGreaterThan(0);
+  expect(r.unitsFailed).toBe(units);
+  expect(r.crossListFailed).toBe(true);
+  expect(r.fields.crossList.compared).toBe(0);
+  expect(r.pass).toBe(false);
+});

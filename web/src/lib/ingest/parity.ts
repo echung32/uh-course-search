@@ -110,16 +110,15 @@ export async function crseavailParity(
     for (const [k, e] of built) {
       const s = stored.get(k);
       if (!s) continue;
-      const key = `${k}`;
       const f = e.facts;
       const sg = parse(s.grading_modes);
-      if (sg !== null) record("gradingModes", key, sg, f.gradingModes, JSON.stringify(sortedJson(sg)) === JSON.stringify(sortedJson(f.gradingModes)));
+      if (sg !== null) record("gradingModes", k, sg, f.gradingModes, JSON.stringify(sortedJson(sg)) === JSON.stringify(sortedJson(f.gradingModes)));
       const sc = (parse(s.credit_breakdown) as { creditHours?: number | null } | null)?.creditHours ?? null;
-      if (sc !== null) record("creditHours", key, sc, f.creditBreakdown.creditHours, sc === f.creditBreakdown.creditHours);
-      if (s.college_code !== null) record("collegeCode", key, s.college_code, f.collegeCode, s.college_code === f.collegeCode);
-      if (s.department_code !== null) record("departmentCode", key, s.department_code, f.departmentCode, s.department_code === f.departmentCode);
+      if (sc !== null) record("creditHours", k, sc, f.creditBreakdown.creditHours, sc === f.creditBreakdown.creditHours);
+      if (s.college_code !== null) record("collegeCode", k, s.college_code, f.collegeCode, s.college_code === f.collegeCode);
+      if (s.department_code !== null) record("departmentCode", k, s.department_code, f.departmentCode, s.department_code === f.departmentCode);
       if (s.description !== null) {
-        record("description", key, s.description, f.description, s.description.trimEnd() === (f.description ?? "").trimEnd());
+        record("description", k, s.description, f.description, s.description.trimEnd() === (f.description ?? "").trimEnd());
       }
     }
   }
@@ -146,6 +145,11 @@ export async function crseavailParity(
   }
 
   for (const f of FIELDS) fields[f].rate = fields[f].compared ? fields[f].equal / fields[f].compared : 1;
-  const pass = unitsOk > 0 && FIELDS.every((f) => fields[f].compared === 0 || fields[f].rate >= PASS_RATE);
+  const anyCompared = FIELDS.some((f) => fields[f].compared > 0);
+  const pass =
+    unitsOk > 0 &&
+    !crossListFailed &&
+    anyCompared &&
+    FIELDS.every((f) => fields[f].compared === 0 || fields[f].rate >= PASS_RATE);
   return { term, fields, unitsFailed, crossListFailed, pass };
 }
