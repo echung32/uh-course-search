@@ -116,4 +116,15 @@ test("upsertCourseFacts never nulls description or touches prereqs", async () =>
   expect(r.department).toBe("ICS");
   expect(r.facts_source).toBe("crseavail");
   expect(r.facts_synced_at).toBe(70);
+
+  // An empty incoming list never erases a stored non-empty one...
+  await upsertCourseFacts(f.db, key, { ...facts, gradingModes: [], scheduleTypes: [] }, "crseavail", 80);
+  const kept = f.raw.prepare("SELECT grading_modes, schedule_types FROM course").get() as Record<string, string>;
+  expect(JSON.parse(kept.schedule_types)).toEqual(["Lecture  LEC"]);
+  expect(JSON.parse(kept.grading_modes)).toEqual(["Standard  S"]);
+  // ...but a non-empty incoming list still replaces it.
+  await upsertCourseFacts(f.db, key, { ...facts, gradingModes: ["Audit  A"], scheduleTypes: ["Laboratory  LAB"] }, "banner", 90);
+  const replaced = f.raw.prepare("SELECT grading_modes, schedule_types FROM course").get() as Record<string, string>;
+  expect(JSON.parse(replaced.schedule_types)).toEqual(["Laboratory  LAB"]);
+  expect(JSON.parse(replaced.grading_modes)).toEqual(["Audit  A"]);
 });

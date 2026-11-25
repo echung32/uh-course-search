@@ -699,8 +699,11 @@ export async function upsertCourseFacts(
          college_name = COALESCE(excluded.college_name, course.college_name),
          department = COALESCE(excluded.department, course.department),
          department_code = COALESCE(excluded.department_code, course.department_code),
-         grading_modes = excluded.grading_modes,
-         schedule_types = excluded.schedule_types,
+         -- An empty incoming list never erases a stored non-empty one.
+         grading_modes = CASE WHEN excluded.grading_modes = '[]'
+           THEN COALESCE(course.grading_modes, '[]') ELSE excluded.grading_modes END,
+         schedule_types = CASE WHEN excluded.schedule_types = '[]'
+           THEN COALESCE(course.schedule_types, '[]') ELSE excluded.schedule_types END,
          credit_breakdown = excluded.credit_breakdown,
          description = COALESCE(excluded.description, course.description),
          facts_synced_at = excluded.facts_synced_at,
