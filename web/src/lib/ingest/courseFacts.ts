@@ -1,0 +1,623 @@
+/**
+ * Course facts + cross-lists from crseavail (UH's Class Availability API), with
+ * automatic fallback to Banner. See docs/superpowers/specs/2026-11-25-crseavail-
+ * hybrid-ingest-design.md §3 (mapping) and §5 (fallback).
+ *
+ * A unit of work is one (term, campus, subject). Each unit's crseavail response
+ * must pass the checks (row count ≥ 90% of our sections, ≥ 95% of its CRNs known,
+ * not empty when we already hold facts) or its courses fall back to Banner
+ * (`getCatalogDetails` + `getCourseDescription`, 2 calls per course). The first
+ * attempted unit is the preflight: its rejection — or 5 consecutive rejections —
+ * trips a per-run breaker that sends every remaining unit to Banner.
+ *
+ * crseavail never nulls anything here (upsertCourseFacts COALESCEs); the one
+ * exception is the guarded term-wide cross-list write in syncCrossList.
+ */
+import {
+  establishSession,
+  getCatalogDetails,
+  getCourseDescription,
+  getCrossListSections,
+} from "@/lib/sis/client";
+import { parseCatalogDetails } from "@/lib/sis/parse/catalogDetails";
+import { parseCourseDescription } from "@/lib/sis/parse/text";
+import { parseSectionCrns } from "@/lib/sis/parse/sectionDetail";
+import type { SisSession } from "@/lib/sis/types";
+import type { D1Like } from "@/lib/db/types";
+import {
+  upsertCourseFacts,
+  upsertSectionCrossLists,
+  type CourseFacts,
+  type CourseKey,
+} from "@/lib/db/upsert";
+import {
+  caCourseDesc,
+  caCourseGrading,
+  caCourses,
+  caCrossList,
+  crseavailEnabled,
+  CrseavailError,
+} from "@/lib/crseavail/client";
+import type { CaUnit } from "@/lib/crseavail/types";
+import {
+  buildCampusCodeMap,
+  buildCourseFacts,
+  crossListMap,
+  deriveScheduleTypes,
+  extractCampusPairs,
+  type CrnIndex,
+} from "@/lib/crseavail/map";
+import { logCa } from "@/lib/log";
+import { rotateIfNeeded } from "./details";
+
+const MIN_COUNT_RATIO = 0.9; // crseavail rows vs our section count
+const MIN_CRN_MATCH = 0.95; // crseavail CRNs found in course_section
+const BREAKER_CONSECUTIVE = 5;
+const MIN_XLIST_RATIO = 0.5; // cross-listed term CRNs vs those we hold
+const CAMPUS_SAMPLE = 50; // raw_json rows sampled per campus description
+const FACTS_PER_SESSION = 50; // 2 calls/course ≈ 100 requests per session
+const XLIST_PER_SESSION = 100; // 1 call/CRN
+const XLIST_FLUSH = 50;
+const DEFAULT_DELAY_MS = 250;
+const DEFAULT_BANNER_CAP = 150;
+
+export interface CourseFactsResult {
+  source: "crseavail" | "degraded" | "off";
+  /** Units considered this run (after the `gaps` filter). */
+  units: number;
+  /** Units whose courses went to Banner (rejected, unmapped, breaker, or off). */
+  unitsFallback: number;
+  breakerTripped: boolean;
+  /** Course rows written from crseavail. */
+  written: number;
+  /** Course rows written from Banner. */
+  bannerCourses: number;
+  /** Courses whose stored description changed (crseavail path). */
+  changedDescriptions: CourseKey[];
+}
+
+export interface CourseFactsOptions {
+  mode: "gaps" | "all";
+  /** `all` mode only: max Banner fallback courses beyond `bannerExtra`. */
+  bannerCap?: number;
+  /** `all` mode only: courses that always get Banner if their unit falls back. */
+  bannerExtra?: CourseKey[];
+  delayMs?: number;
+  /** Epoch ms; stop starting new work once past it. */
+  deadline?: number;
+  log?: (m: string) => void;
+}
+
+interface TermCourse {
+  key: CourseKey;
+  crn: string; // MIN(crn) — the representative section
+  factsAt: number | null;
+  description: string | null;
+}
+
+interface Unit {
+  campus: string;
+  subject: string;
+  sections: number;
+  courses: TermCourse[];
+}
+
+const ck = (k: { campus: string; subject: string; courseNumber: string }) =>
+  `${k.campus}|${k.subject}|${k.courseNumber}`;
+const isGap = (c: TermCourse) => c.factsAt === null;
+const pastDeadline = (d?: number) => d !== undefined && Date.now() > d;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function envCap(): number {
+  const n = Number(process.env.REFRESH_ROLLING_FACTS_COURSES);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_BANNER_CAP;
+}
+
+/** Every (campus, subject, course) of the term with its stored facts state. */
+async function loadTermCourses(db: D1Like, term: string): Promise<TermCourse[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT s.campus, s.subject, s.courseNumber, s.crn,
+              c.facts_synced_at AS factsAt, c.description
+         FROM (SELECT IFNULL(campus_description, '') AS campus, subject,
+                      course_number AS courseNumber, MIN(crn) AS crn
+                 FROM course_section WHERE term = ?
+                GROUP BY 1, 2, 3) s
+         LEFT JOIN course c
+           ON c.term = ? AND c.campus_description = s.campus
+          AND c.subject = s.subject AND c.course_number = s.courseNumber
+        ORDER BY 1, 2, 3`
+    )
+    .bind(term, term)
+    .all<{ campus: string; subject: string; courseNumber: string; crn: string; factsAt: number | null; description: string | null }>();
+  return results.map((r) => ({
+    key: { term, campus: r.campus, subject: r.subject, courseNumber: r.courseNumber },
+    crn: r.crn,
+    factsAt: r.factsAt,
+    description: r.description,
+  }));
+}
+
+/** CRN → course key for the whole term (the crseavail join, spec §3.2). */
+async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: CrnIndex; perUnit: Map<string, number> }> {
+  const { results } = await db
+    .prepare(
+      `SELECT crn, IFNULL(campus_description, '') AS campus, subject, course_number AS courseNumber
+         FROM course_section WHERE term = ?`
+    )
+    .bind(term)
+    .all<{ crn: string; campus: string; subject: string; courseNumber: string }>();
+  const index: CrnIndex = new Map();
+  const perUnit = new Map<string, number>();
+  for (const r of results) {
+    index.set(r.crn, { term, campus: r.campus, subject: r.subject, courseNumber: r.courseNumber });
+    const u = `${r.campus}|${r.subject}`;
+    perUnit.set(u, (perUnit.get(u) ?? 0) + 1);
+  }
+  return { index, perUnit };
+}
+
+// Campus description → crseavail campus code, from raw_json across all terms.
+// Cached per process (per DB handle, so a test's fresh DB gets a fresh map).
+const campusMaps = new WeakMap<D1Like, Promise<Map<string, string>>>();
+
+function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
+  let p = campusMaps.get(db);
+  if (!p) {
+    p = loadCampusCodeMap(db).catch((e) => {
+      campusMaps.delete(db);
+      throw e;
+    });
+    campusMaps.set(db, p);
+  }
+  return p;
+}
+
+async function loadCampusCodeMap(db: D1Like): Promise<Map<string, string>> {
+  const { results: descs } = await db
+    .prepare(
+      `SELECT DISTINCT campus_description AS d FROM course_section
+        WHERE campus_description IS NOT NULL AND campus_description <> ''`
+    )
+    .all<{ d: string }>();
+  if (descs.length === 0) return new Map();
+  // Only rows carrying a non-null meeting campus (raw_json is compact JSON).
+  const res = await db.batch(
+    descs.map(({ d }) =>
+      db
+        .prepare(
+          `SELECT raw_json FROM course_section
+            WHERE campus_description = ? AND raw_json LIKE '%"campus":"%' LIMIT ${CAMPUS_SAMPLE}`
+        )
+        .bind(d)
+    )
+  );
+  const pairs: Array<{ campusDescription: string; code: string }> = [];
+  for (const r of res) {
+    for (const row of r.results as Array<{ raw_json: string }>) {
+      try {
+        pairs.push(...extractCampusPairs(row.raw_json));
+      } catch {
+        // malformed raw_json: skip the row
+      }
+    }
+  }
+  return buildCampusCodeMap(pairs);
+}
+
+/**
+ * College/department names for crseavail's codes, from the newest-term `course`
+ * row with the same campus + code (spec §3.4). Null when a given code is unknown.
+ */
+export async function resolveCatalogNames(
+  db: D1Like,
+  campus: string,
+  collegeCode: string | null,
+  departmentCode: string | null
+): Promise<{ collegeName: string | null; department: string | null } | null> {
+  const lookup = async (codeCol: string, nameCol: string, code: string) =>
+    (
+      await db
+        .prepare(
+          `SELECT ${nameCol} AS n FROM course
+            WHERE campus_description = ? AND ${codeCol} = ? AND ${nameCol} IS NOT NULL
+            ORDER BY term DESC LIMIT 1`
+        )
+        .bind(campus, code)
+        .first<{ n: string }>()
+    )?.n ?? null;
+  const collegeName = collegeCode ? await lookup("college_code", "college_name", collegeCode) : null;
+  if (collegeCode && collegeName === null) return null;
+  const department = departmentCode ? await lookup("department_code", "department", departmentCode) : null;
+  if (departmentCode && department === null) return null;
+  return { collegeName, department };
+}
+
+/** A lazily-established, rotating Banner session shared within one call. */
+function bannerSessions(term: string, perSession: number) {
+  let session: SisSession | null = null;
+  let since = 0;
+  return async (): Promise<SisSession> => {
+    if (!session) {
+      session = await establishSession(term);
+    } else {
+      const next = await rotateIfNeeded(session, term, since, perSession);
+      if (next !== session) [session, since] = [next, 0];
+    }
+    since += 1;
+    return session;
+  };
+}
+
+/**
+ * Banner course facts for the given courses: catalog + description on each
+ * course's MIN(crn), written with facts_source='banner'. Rotates sessions itself.
+ */
+export async function bannerCourseFacts(
+  db: D1Like,
+  term: string,
+  courses: CourseKey[],
+  opts: { delayMs?: number; deadline?: number; log?: (m: string) => void } = {}
+): Promise<{ done: number; failed: number }> {
+  const log = opts.log ?? (() => {});
+  const delayMs = opts.delayMs ?? DEFAULT_DELAY_MS;
+  if (courses.length === 0) return { done: 0, failed: 0 };
+  const crnOf = new Map((await loadTermCourses(db, term)).map((c) => [ck(c.key), c.crn]));
+  const nextSession = bannerSessions(term, FACTS_PER_SESSION);
+  let done = 0;
+  let failed = 0;
+  for (let i = 0; i < courses.length; i++) {
+    if (pastDeadline(opts.deadline)) break;
+    const key = courses[i];
+    const crn = crnOf.get(ck(key));
+    if (!crn) {
+      failed += 1;
+      continue;
+    }
+    let session: SisSession;
+    try {
+      session = await nextSession();
+    } catch (err) {
+      log(`[${term}] banner facts: session FAILED, ${courses.length - i} courses skipped: ${(err as Error).message}`);
+      failed += courses.length - i;
+      break;
+    }
+    try {
+      const [catHtml, descHtml] = await Promise.all([
+        getCatalogDetails(session, term, crn),
+        getCourseDescription(session, term, crn),
+      ]);
+      const cat = parseCatalogDetails(catHtml);
+      await upsertCourseFacts(
+        db,
+        key,
+        {
+          collegeCode: cat.collegeCode,
+          collegeName: cat.collegeName,
+          department: cat.department,
+          departmentCode: cat.departmentCode,
+          gradingModes: cat.gradingModes,
+          scheduleTypes: cat.scheduleTypes,
+          creditBreakdown: cat.creditBreakdown,
+          description: parseCourseDescription(descHtml),
+        },
+        "banner",
+        Date.now()
+      );
+      done += 1;
+    } catch (err) {
+      failed += 1;
+      log(`[${term}] banner facts ${key.campus} ${key.subject} ${key.courseNumber} FAILED: ${(err as Error).message}`);
+    }
+    if (delayMs > 0) await sleep(delayMs);
+  }
+  log(`[${term}] banner facts: ${done}/${courses.length} courses (${failed} failed)`);
+  return { done, failed };
+}
+
+type Rejection = CrseavailError["reason"] | "count" | "crn-match" | "empty" | "no-campus-code";
+
+export async function syncCourseFacts(
+  db: D1Like,
+  term: string,
+  opts: CourseFactsOptions
+): Promise<CourseFactsResult> {
+  const log = opts.log ?? (() => {});
+  const enabled = crseavailEnabled();
+  const all = await loadTermCourses(db, term);
+
+  // Units (spec §3.1), in a stable order; `gaps` keeps units with a gap course.
+  const byUnit = new Map<string, Unit>();
+  for (const c of all) {
+    const u = `${c.key.campus}|${c.key.subject}`;
+    if (!byUnit.has(u)) byUnit.set(u, { campus: c.key.campus, subject: c.key.subject, sections: 0, courses: [] });
+    byUnit.get(u)!.courses.push(c);
+  }
+  const units = [...byUnit.values()].filter((u) => opts.mode === "all" || u.courses.some(isGap));
+
+  const result: CourseFactsResult = {
+    source: enabled ? "crseavail" : "off",
+    units: units.length,
+    unitsFallback: 0,
+    breakerTripped: false,
+    written: 0,
+    bannerCourses: 0,
+    changedDescriptions: [],
+  };
+  const pool: TermCourse[] = []; // Banner fallback candidates
+  const toPool = (cs: TermCourse[]) => pool.push(...(opts.mode === "gaps" ? cs.filter(isGap) : cs));
+
+  if (enabled && units.length > 0) {
+    const [codes, { index, perUnit }] = await Promise.all([campusCodeMap(db), loadCrnIndex(db, term)]);
+    for (const u of units) u.sections = perUnit.get(`${u.campus}|${u.subject}`) ?? 0;
+    const names = new Map<string, Promise<{ collegeName: string | null; department: string | null }>>();
+    const nameSession = bannerSessions(term, FACTS_PER_SESSION);
+    const namesFor = (campus: string, coll: string | null, dept: string | null, crn: string) => {
+      const k = `${campus}|${coll ?? ""}|${dept ?? ""}`;
+      if (!names.has(k)) names.set(k, lookupNames(db, term, campus, coll, dept, crn, nameSession, log));
+      return names.get(k)!;
+    };
+    let attempted = 0;
+    let consecutive = 0;
+
+    for (const u of units) {
+      if (pastDeadline(opts.deadline)) {
+        log(`[${term}] course facts: deadline reached, stopping`);
+        break;
+      }
+      const code = codes.get(u.campus);
+      const unitName = `${term} ${code ?? JSON.stringify(u.campus)} ${u.subject}`;
+      const reject = (reason: Rejection, counts: boolean) => {
+        logCa(`${unitName}: rejected (${reason}) → Banner`);
+        result.unitsFallback += 1;
+        toPool(u.courses);
+        if (!counts) return;
+        consecutive += 1;
+        if (attempted === 0 || consecutive >= BREAKER_CONSECUTIVE) {
+          result.breakerTripped = true;
+          result.source = "degraded";
+          logCa(`${term}: breaker tripped after ${unitName} (${reason}); Banner-only for the rest of the run`);
+        }
+      };
+
+      if (result.breakerTripped) {
+        result.unitsFallback += 1;
+        toPool(u.courses);
+        continue;
+      }
+      if (!code) {
+        reject("no-campus-code", false);
+        continue;
+      }
+      const ca = { term, campusCode: code, subject: u.subject };
+      const r = await fetchAndApplyUnit(db, u, ca, unitName, index, namesFor, result);
+      if (typeof r === "string") reject(r, true);
+      else {
+        consecutive = 0;
+        toPool(r); // courses absent from an accepted response
+      }
+      attempted += 1;
+    }
+  } else if (!enabled) {
+    result.unitsFallback = units.length;
+    for (const u of units) toPool(u.courses);
+  }
+
+  // Banner fallback: uncapped in `gaps`; in `all`, bannerExtra + the stalest.
+  let chosen = pool;
+  if (opts.mode === "all") {
+    const extra = new Set((opts.bannerExtra ?? []).map(ck));
+    const stalest = pool
+      .filter((c) => !extra.has(ck(c.key)))
+      .sort((a, b) => (a.factsAt ?? -1) - (b.factsAt ?? -1))
+      .slice(0, opts.bannerCap ?? envCap());
+    chosen = [...pool.filter((c) => extra.has(ck(c.key))), ...stalest];
+  }
+  if (chosen.length > 0) {
+    const b = await bannerCourseFacts(db, term, chosen.map((c) => c.key), opts);
+    result.bannerCourses = b.done;
+  }
+  log(
+    `[${term}] course facts (${result.source}): ${result.written} crseavail, ${result.bannerCourses} banner, ` +
+      `${result.unitsFallback}/${result.units} units fell back${result.breakerTripped ? ", breaker tripped" : ""}`
+  );
+  return result;
+}
+
+/**
+ * Fetches + checks one unit and writes its facts when accepted. Returns the
+ * rejection reason, or (accepted) the unit's courses crseavail did not cover.
+ */
+async function fetchAndApplyUnit(
+  db: D1Like,
+  u: Unit,
+  ca: CaUnit,
+  unitName: string,
+  index: CrnIndex,
+  namesFor: (campus: string, coll: string | null, dept: string | null, crn: string) => Promise<{ collegeName: string | null; department: string | null }>,
+  result: CourseFactsResult
+): Promise<Rejection | TermCourse[]> {
+  const call = async <T>(name: string, fn: (x: CaUnit) => Promise<T[]>): Promise<T[]> => {
+    try {
+      const rows = await fn(ca);
+      logCa(`${unitName} ${name}: ${rows.length} rows`);
+      return rows;
+    } catch (err) {
+      logCa(`${unitName} ${name}: failed (${err instanceof CrseavailError ? err.reason : "error"})`);
+      throw err;
+    }
+  };
+  try {
+    const courses = await call("courses", caCourses);
+    const held = u.courses.some((c) => c.factsAt !== null);
+    if (courses.length === 0 && held) return "empty";
+    if (courses.length < MIN_COUNT_RATIO * u.sections) return "count";
+    const crns = new Set(courses.map((r) => r.ssbsectCrn1));
+    const known = [...crns].filter((c) => index.has(c)).length;
+    if (crns.size > 0 && known < MIN_CRN_MATCH * crns.size) return "crn-match";
+    const descs = await call("course-desc", caCourseDesc);
+    const grading = await call("course-grading", caCourseGrading);
+    // Every section has a grading mode; an empty list would erase stored ones.
+    if (courses.length > 0 && grading.length === 0) return "empty";
+
+    const built = buildCourseFacts({ courses, descs, grading }, index);
+    const { results: secs } = await db
+      .prepare(
+        `SELECT course_number AS cn, raw_json FROM course_section
+          WHERE term = ? AND IFNULL(campus_description, '') = ? AND subject = ?`
+      )
+      .bind(ca.term, u.campus, u.subject)
+      .all<{ cn: string; raw_json: string }>();
+    const rawByCourse = new Map<string, string[]>();
+    for (const s of secs) rawByCourse.set(s.cn, [...(rawByCourse.get(s.cn) ?? []), s.raw_json]);
+
+    const missing: TermCourse[] = [];
+    for (const tc of u.courses) {
+      const e = built.get(ck(tc.key));
+      if (!e) {
+        missing.push(tc);
+        continue;
+      }
+      let scheduleTypes: string[] = [];
+      try {
+        scheduleTypes = deriveScheduleTypes(rawByCourse.get(tc.key.courseNumber) ?? []);
+      } catch {
+        // malformed raw_json: leave the list empty
+      }
+      const n = await namesFor(tc.key.campus, e.facts.collegeCode, e.facts.departmentCode, tc.crn);
+      const facts: CourseFacts = { ...e.facts, ...n, scheduleTypes };
+      if (tc.description !== null && facts.description !== null && tc.description !== facts.description) {
+        result.changedDescriptions.push(tc.key);
+      }
+      await upsertCourseFacts(db, tc.key, facts, "crseavail", Date.now());
+      result.written += 1;
+    }
+    if (missing.length > 0) logCa(`${unitName}: ${missing.length} course(s) absent from crseavail → Banner`);
+    return missing;
+  } catch (err) {
+    if (err instanceof CrseavailError) return err.reason;
+    throw err;
+  }
+}
+
+/** Names for one (campus, codes): stored rows first, else one Banner catalog lookup. */
+async function lookupNames(
+  db: D1Like,
+  term: string,
+  campus: string,
+  coll: string | null,
+  dept: string | null,
+  crn: string,
+  nextSession: () => Promise<SisSession>,
+  log: (m: string) => void
+): Promise<{ collegeName: string | null; department: string | null }> {
+  const known = await resolveCatalogNames(db, campus, coll, dept);
+  if (known) return known;
+  try {
+    const cat = parseCatalogDetails(await getCatalogDetails(await nextSession(), term, crn));
+    return { collegeName: cat.collegeName, department: cat.department };
+  } catch (err) {
+    // Names stay NULL (COALESCE keeps any stored ones); facets tolerate NULL.
+    log(`[${term}] names for ${campus} ${coll ?? "-"}/${dept ?? "-"} FAILED: ${(err as Error).message}`);
+    return { collegeName: null, department: null };
+  }
+}
+
+/**
+ * Term-wide cross-lists. A crseavail response with > 0 rows that covers ≥ 50% as
+ * many term CRNs as we hold cross-listed is authoritative for EVERY term CRN
+ * (CRNs in no group become NULL — the one guarded crseavail null, spec §3.3).
+ * Otherwise Banner `getCrossListSections` runs for `fallbackCrns` only.
+ */
+export async function syncCrossList(
+  db: D1Like,
+  term: string,
+  opts: { fallbackCrns: string[]; delayMs?: number; deadline?: number; log?: (m: string) => void }
+): Promise<{ source: "crseavail" | "banner" | "skipped"; written: number }> {
+  const log = opts.log ?? (() => {});
+  if (pastDeadline(opts.deadline)) return { source: "skipped", written: 0 };
+
+  if (crseavailEnabled()) {
+    let reason: string | null = null;
+    try {
+      const rows = await caCrossList(term).catch((err) => {
+        logCa(`${term} crosslist: failed (${err instanceof CrseavailError ? err.reason : "error"})`);
+        throw err;
+      });
+      logCa(`${term} crosslist: ${rows.length} rows`);
+      const { results } = await db
+        .prepare("SELECT crn FROM course_section WHERE term = ?")
+        .bind(term)
+        .all<{ crn: string }>();
+      const termCrns = results.map((r) => r.crn);
+      const held =
+        (
+          await db
+            .prepare("SELECT COUNT(*) AS n FROM section_detail WHERE term = ? AND cross_list_crns IS NOT NULL")
+            .bind(term)
+            .first<{ n: number }>()
+        )?.n ?? 0;
+      const listed = new Set(rows.map((r) => r.ssbsectCrn));
+      const present = termCrns.filter((c) => listed.has(c)).length;
+      if (rows.length === 0) reason = "empty";
+      else if (held > 0 && present < MIN_XLIST_RATIO * held) reason = "count";
+      else {
+        const m = crossListMap(rows, termCrns);
+        const entries = termCrns.map((crn) => ({ crn, crossListCrns: m.get(crn) ?? null }));
+        await upsertSectionCrossLists(db, term, entries, Date.now());
+        log(`[${term}] cross-list (crseavail): ${entries.length} CRNs, ${present} cross-listed`);
+        return { source: "crseavail", written: entries.length };
+      }
+    } catch (err) {
+      if (!(err instanceof CrseavailError)) throw err;
+      reason = err.reason;
+    }
+    logCa(`${term} crosslist: rejected (${reason}) → Banner for ${opts.fallbackCrns.length} CRNs`);
+  }
+
+  const delayMs = opts.delayMs ?? DEFAULT_DELAY_MS;
+  const nextSession = bannerSessions(term, XLIST_PER_SESSION);
+  let pending: Array<{ crn: string; crossListCrns: string[] | null; rawXlstHtml: string }> = [];
+  let written = 0;
+  const flush = async () => {
+    if (pending.length === 0) return;
+    await upsertSectionCrossLists(db, term, pending, Date.now());
+    written += pending.length;
+    pending = [];
+  };
+  for (const crn of opts.fallbackCrns) {
+    if (pastDeadline(opts.deadline)) break;
+    let session: SisSession;
+    try {
+      session = await nextSession();
+    } catch (err) {
+      log(`[${term}] cross-list (banner): session FAILED: ${(err as Error).message}`);
+      break;
+    }
+    try {
+      const html = await getCrossListSections(session, term, crn);
+      pending.push({ crn, crossListCrns: parseSectionCrns(html), rawXlstHtml: html });
+      if (pending.length >= XLIST_FLUSH) await flush();
+    } catch (err) {
+      log(`[${term}] cross-list ${crn} FAILED: ${(err as Error).message}`);
+    }
+    if (delayMs > 0) await sleep(delayMs);
+  }
+  await flush();
+  log(`[${term}] cross-list (banner): ${written}/${opts.fallbackCrns.length} CRNs`);
+  return { source: "banner", written };
+}
+
+/** JSON for `sync_run.notes`. */
+export function notesFromFacts(r: CourseFactsResult, crossList: string): string {
+  return JSON.stringify({
+    crseavail: r.source === "crseavail" ? "ok" : r.source,
+    units: r.units,
+    unitsFallback: r.unitsFallback,
+    breakerTripped: r.breakerTripped,
+    written: r.written,
+    bannerCourses: r.bannerCourses,
+    changedDescriptions: r.changedDescriptions.length,
+    crosslist: crossList,
+  });
+}

@@ -50,12 +50,12 @@ export default defineConfig({
     {
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts", "**/fragments-units.spec.ts", "**/crseavail-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts", "**/fragments-units.spec.ts", "**/crseavail-units.spec.ts", "**/course-facts.spec.ts"],
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts", "**/fragments-units.spec.ts", "**/crseavail-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts", "**/fragments-units.spec.ts", "**/crseavail-units.spec.ts", "**/course-facts.spec.ts"],
     },
   ],
 
@@ -97,6 +97,7 @@ export default defineConfig({
       //                       production leaves this unset, so those routes 501).
       //   EDGE_CACHE=0      → the ingestion specs mutate D1 mid-run; reads must
       //                       observe fresh data, not a cached response.
+      //   CRSEAVAIL=1       → ingestion uses the mock's /crseavail/api routes.
       command:
         `yarn build && yarn wrangler dev --ip 127.0.0.1 --port ${APP_PORT}` +
         ` --persist-to ${E2E_PERSIST}` +
@@ -104,6 +105,7 @@ export default defineConfig({
         ` --var DYNAMIC_SYNC:1 --var COURSE_TEXT_LAZY:0 --var LOG_SOURCE:0` +
         ` --var INGEST_ON_WORKER:1 --var ADMIN_SECRET:${ADMIN_SECRET}` +
         ` --var EDGE_CACHE:0` +
+        ` --var CRSEAVAIL:1 --var CRSEAVAIL_BASE_URL:http://127.0.0.1:${MOCK_SIS_PORT}/crseavail/api` +
         (NATIVE_D1
           ? ""
           : ` --var DB_GATEWAY_URL:http://127.0.0.1:${GATEWAY_PORT}` +

@@ -59,7 +59,7 @@ const CATALOG_PER_SESSION = 25; // ~100 requests
 const ITEMS_PER_SESSION = 80;
 
 /** Re-handshakes if the session is too old or has done too many requests. */
-async function rotateIfNeeded(
+export async function rotateIfNeeded(
   session: SisSession,
   term: string,
   count: number,
