@@ -167,14 +167,8 @@ test("details sync persists filter options and course catalog", async ({ request
   expect(detail.linkedCrns).toBeNull();
   expect(detail.syllabus).toBeNull();
 
-  // Slice 4: instructor contact card (CRN 10005 has faculty banner_id 9001).
-  expect(body.instructors).toBe(1);
-  const instr = await request.get("/api/instructor", { params: { bannerId: "9001" } });
-  expect(instr.ok()).toBeTruthy();
-  const card = await instr.json();
-  expect(card.title).toBe("Associate Professor");
-  expect(card.department).toBe("Information & Computer Sciences");
-  expect(card.college).toBe("MAN-College of Natural Sciences");
+  // The contact-card pass was removed: no instructor rows are fetched.
+  expect(body.instructors).toBe(0);
 
   // Wrong campus for an existing course is a 404 (campus is part of the key).
   const wrongCampus = await request.get("/api/course", {

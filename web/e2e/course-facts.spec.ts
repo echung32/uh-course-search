@@ -11,6 +11,7 @@ const savedEnv: Record<string, string | undefined> = {};
 
 type CF = typeof import("../src/lib/ingest/courseFacts");
 let cf: CF;
+let crossList: typeof import("../src/lib/ingest/crossList");
 let syncTerm: typeof import("../src/lib/ingest/sync").syncTerm;
 let f: FreshSearchDb;
 
@@ -26,6 +27,7 @@ test.beforeAll(async () => {
   process.env.CRSEAVAIL = "1";
   process.env.CRSEAVAIL_BASE_URL = `${MOCK}/crseavail/api`;
   cf = await import("../src/lib/ingest/courseFacts");
+  crossList = await import("../src/lib/ingest/crossList");
   ({ syncTerm } = await import("../src/lib/ingest/sync"));
 });
 
@@ -165,7 +167,7 @@ test("valid cross-list clears dropped membership; short one does not", async () 
       | undefined;
 
   seed();
-  const ok = await cf.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
+  const ok = await crossList.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
   expect(ok.source).toBe("crseavail");
   expect(xl("10003")!.cross_list_crns).toBeNull();
   expect(xl("10001")!.cross_list_crns).toBe('["10002"]');
@@ -176,7 +178,7 @@ test("valid cross-list clears dropped membership; short one does not", async () 
   // `short` returns 1 row → 1 term CRN < 50% of 3 → rejected, nothing touched.
   seed();
   await setMode("short");
-  const short = await cf.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
+  const short = await crossList.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
   expect(short.source).toBe("banner");
   expect(short.written).toBe(0);
   expect(xl("10003")!.cross_list_crns).toBe('["10004"]');
@@ -184,7 +186,7 @@ test("valid cross-list clears dropped membership; short one does not", async () 
   expect(xl("10002")!.cross_list_crns).toBe('["10001"]');
 
   await setMode("empty");
-  const bad = await cf.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
+  const bad = await crossList.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
   expect(bad.source).toBe("banner");
   expect(bad.written).toBe(0);
   expect(xl("10003")!.cross_list_crns).toBe('["10004"]');

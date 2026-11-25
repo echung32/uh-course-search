@@ -11,22 +11,19 @@
  * trips a per-run breaker that sends every remaining unit to Banner.
  *
  * crseavail never nulls anything here (upsertCourseFacts COALESCEs); the one
- * exception is the guarded term-wide cross-list write in syncCrossList.
+ * exception is the guarded term-wide cross-list write in syncCrossList (crossList.ts).
  */
 import {
   establishSession,
   getCatalogDetails,
   getCourseDescription,
-  getCrossListSections,
 } from "@/lib/sis/client";
 import { parseCatalogDetails } from "@/lib/sis/parse/catalogDetails";
 import { parseCourseDescription } from "@/lib/sis/parse/text";
-import { parseSectionCrns } from "@/lib/sis/parse/sectionDetail";
 import type { SisSession } from "@/lib/sis/types";
 import type { D1Like } from "@/lib/db/types";
 import {
   upsertCourseFacts,
-  upsertSectionCrossLists,
   type CourseFacts,
   type CourseKey,
 } from "@/lib/db/upsert";
@@ -34,7 +31,6 @@ import {
   caCourseDesc,
   caCourseGrading,
   caCourses,
-  caCrossList,
   crseavailEnabled,
   CrseavailError,
 } from "@/lib/crseavail/client";
@@ -42,22 +38,18 @@ import type { CaUnit } from "@/lib/crseavail/types";
 import {
   buildCampusCodeMap,
   buildCourseFacts,
-  crossListMap,
   deriveScheduleTypes,
   extractCampusPairs,
   type CrnIndex,
 } from "@/lib/crseavail/map";
 import { logCa } from "@/lib/log";
-import { rotateIfNeeded } from "./details";
+import { bannerSessions } from "./fragments";
 
 const MIN_COUNT_RATIO = 0.9; // crseavail rows vs our section count
 const MIN_CRN_MATCH = 0.95; // crseavail CRNs found in course_section
 const BREAKER_CONSECUTIVE = 5;
-const MIN_XLIST_RATIO = 0.5; // cross-listed term CRNs vs those we hold
 const CAMPUS_SAMPLE = 50; // raw_json rows sampled per campus description
 const FACTS_PER_SESSION = 50; // 2 calls/course ≈ 100 requests per session
-const XLIST_PER_SESSION = 100; // 1 call/CRN
-const XLIST_FLUSH = 50;
 const DEFAULT_DELAY_MS = 250;
 const DEFAULT_BANNER_CAP = 150;
 
@@ -233,22 +225,6 @@ export async function resolveCatalogNames(
   const department = departmentCode ? await lookup("department_code", "department", departmentCode) : null;
   if (departmentCode && department === null) return null;
   return { collegeName, department };
-}
-
-/** A lazily-established, rotating Banner session shared within one call. */
-function bannerSessions(term: string, perSession: number) {
-  let session: SisSession | null = null;
-  let since = 0;
-  return async (): Promise<SisSession> => {
-    if (!session) {
-      session = await establishSession(term);
-    } else {
-      const next = await rotateIfNeeded(session, term, since, perSession);
-      if (next !== session) [session, since] = [next, 0];
-    }
-    since += 1;
-    return session;
-  };
 }
 
 /**
@@ -549,91 +525,6 @@ async function lookupNames(
     log(`[${term}] names for ${campus} ${coll ?? "-"}/${dept ?? "-"} FAILED: ${(err as Error).message}`);
     return { collegeName: null, department: null };
   }
-}
-
-/**
- * Term-wide cross-lists. A crseavail response with > 0 rows that covers ≥ 50% as
- * many term CRNs as we hold cross-listed is authoritative for EVERY term CRN
- * (CRNs in no group become NULL — the one guarded crseavail null, spec §3.3).
- * Otherwise Banner `getCrossListSections` runs for `fallbackCrns` only.
- */
-export async function syncCrossList(
-  db: D1Like,
-  term: string,
-  opts: { fallbackCrns: string[]; delayMs?: number; deadline?: number; log?: (m: string) => void }
-): Promise<{ source: "crseavail" | "banner" | "skipped"; written: number }> {
-  const log = opts.log ?? (() => {});
-  if (pastDeadline(opts.deadline)) return { source: "skipped", written: 0 };
-
-  if (crseavailEnabled()) {
-    let reason: string | null = null;
-    try {
-      const rows = await caCrossList(term).catch((err) => {
-        logCa(`${term} crosslist: failed (${err instanceof CrseavailError ? err.reason : "error"})`);
-        throw err;
-      });
-      logCa(`${term} crosslist: ${rows.length} rows`);
-      const { results } = await db
-        .prepare("SELECT crn FROM course_section WHERE term = ?")
-        .bind(term)
-        .all<{ crn: string }>();
-      const termCrns = results.map((r) => r.crn);
-      const held =
-        (
-          await db
-            .prepare("SELECT COUNT(*) AS n FROM section_detail WHERE term = ? AND cross_list_crns IS NOT NULL")
-            .bind(term)
-            .first<{ n: number }>()
-        )?.n ?? 0;
-      const listed = new Set(rows.map((r) => r.ssbsectCrn));
-      const present = termCrns.filter((c) => listed.has(c)).length;
-      if (rows.length === 0) reason = "empty";
-      else if (held > 0 && present < MIN_XLIST_RATIO * held) reason = "count";
-      else {
-        const m = crossListMap(rows, termCrns);
-        const entries = termCrns.map((crn) => ({ crn, crossListCrns: m.get(crn) ?? null }));
-        await upsertSectionCrossLists(db, term, entries, Date.now());
-        log(`[${term}] cross-list (crseavail): ${entries.length} CRNs, ${present} cross-listed`);
-        return { source: "crseavail", written: entries.length };
-      }
-    } catch (err) {
-      if (!(err instanceof CrseavailError)) throw err;
-      reason = err.reason;
-    }
-    logCa(`${term} crosslist: rejected (${reason}) → Banner for ${opts.fallbackCrns.length} CRNs`);
-  }
-
-  const delayMs = opts.delayMs ?? DEFAULT_DELAY_MS;
-  const nextSession = bannerSessions(term, XLIST_PER_SESSION);
-  let pending: Array<{ crn: string; crossListCrns: string[] | null; rawXlstHtml: string }> = [];
-  let written = 0;
-  const flush = async () => {
-    if (pending.length === 0) return;
-    await upsertSectionCrossLists(db, term, pending, Date.now());
-    written += pending.length;
-    pending = [];
-  };
-  for (const crn of opts.fallbackCrns) {
-    if (pastDeadline(opts.deadline)) break;
-    let session: SisSession;
-    try {
-      session = await nextSession();
-    } catch (err) {
-      log(`[${term}] cross-list (banner): session FAILED: ${(err as Error).message}`);
-      break;
-    }
-    try {
-      const html = await getCrossListSections(session, term, crn);
-      pending.push({ crn, crossListCrns: parseSectionCrns(html), rawXlstHtml: html });
-      if (pending.length >= XLIST_FLUSH) await flush();
-    } catch (err) {
-      log(`[${term}] cross-list ${crn} FAILED: ${(err as Error).message}`);
-    }
-    if (delayMs > 0) await sleep(delayMs);
-  }
-  await flush();
-  log(`[${term}] cross-list (banner): ${written}/${opts.fallbackCrns.length} CRNs`);
-  return { source: "banner", written };
 }
 
 /** JSON for `sync_run.notes`. */

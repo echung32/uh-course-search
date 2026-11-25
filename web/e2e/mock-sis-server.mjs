@@ -331,12 +331,18 @@ function sendHtml(res, status, html, extraHeaders = {}) {
 }
 
 function readBody(req) {
-  return new Promise((resolve) => {
+  // Cached so the fail-rule check and a route handler can both read the body.
+  req._bodyPromise ??= new Promise((resolve) => {
     let data = "";
     req.on("data", (chunk) => (data += chunk));
     req.on("end", () => resolve(data));
   });
+  return req._bodyPromise;
 }
+
+// POST /__mock/fail?endpoint=<basename>&crn=<crn> makes that Banner endpoint
+// answer 500 for that CRN; rules accumulate until /__mock/reset.
+const failRules = new Set();
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -355,7 +361,25 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && path === "/__mock/reset") {
     catalogPhase = 1;
     crseavailMode = "ok";
+    failRules.clear();
     return sendJson(res, 200, { ok: true, phase: catalogPhase, crseavail: crseavailMode });
+  }
+
+  // Control endpoint: make one Banner fragment endpoint fail for one CRN.
+  if (req.method === "POST" && path === "/__mock/fail") {
+    const endpoint = url.searchParams.get("endpoint");
+    const crn = url.searchParams.get("crn");
+    if (!endpoint || !crn) return sendJson(res, 400, { error: "endpoint and crn required" });
+    failRules.add(`${endpoint}|${crn}`);
+    return sendJson(res, 200, { ok: true, rules: failRules.size });
+  }
+
+  // Injected Banner fragment failures.
+  if (req.method === "POST" && failRules.size > 0 && path.startsWith("/ssb/searchResults/")) {
+    const crn = new URLSearchParams(await readBody(req)).get("courseReferenceNumber") ?? "";
+    if (failRules.has(`${path.slice("/ssb/searchResults/".length)}|${crn}`)) {
+      return sendJson(res, 500, { error: "injected failure" });
+    }
   }
 
   // Control endpoint: crseavail behavior (ok|empty|html|http500|shape|short).
