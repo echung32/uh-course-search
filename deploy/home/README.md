@@ -117,13 +117,14 @@ machine with wrangler auth.
    present. It's harmless either way: while `DB_GATEWAY_URL` is set,
    `RefreshWorkflow` exits immediately (`src/workflows/refreshGuard.ts`), so it
    can't refresh alongside the home cron.
-9. **First refresh.** Run `docker compose exec cron yarn ingest daily` and confirm a new `sync_run` row. After this, the crontab runs it nightly.
+9. **First refresh.** Run `docker compose exec cron /app/deploy/home/run-daily.sh` and confirm a new `sync_run` row. After this, the crontab runs it nightly.
 
 **Rollback:** `wrangler secret delete DB_GATEWAY_URL` and then `yarn deploy` returns the Worker to the D1 bindings. Those are read-only while over the Free cap, and frozen at 2026-10-11. After 7 clean days, remove the `d1_databases` bindings from `wrangler.jsonc` and delete both D1 databases.
 
 ## Operations
 
 - **Logs:** `docker compose logs -f gateway` shows one line per query (db, statement count, ms; never SQL or params). `docker compose logs -f cron` shows the refresh and backup output.
+- **Manual refresh:** `docker compose exec -d cron sh -c '/app/deploy/home/run-daily.sh > /data/daily-manual.log 2>&1'`. Always go through `run-daily.sh`, never bare `yarn ingest daily`. It holds `/data/.daily.lock`, so a manual run and the 22:00 cron can't overlap; whichever starts second logs "skipped" and exits.
 - **Schema changes and updates.** Migrations are baked into the image, so build first and migrate from the new image. Only then restart the services onto it:
   ```bash
   git pull
