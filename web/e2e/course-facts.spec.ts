@@ -92,9 +92,14 @@ test("empty response for held data is rejected and nothing is nulled", async () 
   await setMode("empty");
   const r = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0 });
   expect(r.unitsFallback).toBeGreaterThanOrEqual(1);
+  expect(r.written).toBe(0); // nothing written from crseavail
+  // The first unit (ICS) holds facts → the empty/held-data rule rejects it,
+  // tripping the breaker; MATH is skipped by the breaker.
+  expect(r.rejections).toEqual({ empty: 1, breaker: 1 });
   for (const c of courses()) {
     expect(c.description).not.toBeNull();
     expect(c.college_code).not.toBeNull();
+    expect(c.facts_source).toBe("banner");
   }
 });
 
@@ -129,6 +134,10 @@ test("unmapped campus goes to Banner without crashing", async () => {
   const r = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0 });
   expect(r.units).toBeGreaterThan(0);
   expect(r.unitsFallback).toBe(r.units);
+  expect(r.breakerTripped).toBe(false); // unmapped units never count toward the breaker
+  expect(r.source).toBe("degraded"); // every unit fell back
+  expect(r.rejections).toEqual({ "no-campus-code": r.units });
+  expect(JSON.parse(cf.notesFromFacts(r, "banner")).noCampusCode).toBe(r.units);
   const rows = courses();
   expect(rows.length).toBe(7);
   for (const c of rows) expect(c.facts_source).toBe("banner");
@@ -163,7 +172,17 @@ test("valid cross-list clears dropped membership; short one does not", async () 
   const crns = f.raw.prepare("SELECT crn FROM course_section WHERE term = ?").all(TERM) as Array<{ crn: string }>;
   for (const { crn } of crns) expect(xl(crn)?.crosslist_synced_at).not.toBeNull();
 
+  // Ratio guard: we now hold 3 cross-listed CRNs (10001, 10002, re-seeded 10003);
+  // `short` returns 1 row → 1 term CRN < 50% of 3 → rejected, nothing touched.
   seed();
+  await setMode("short");
+  const short = await cf.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
+  expect(short.source).toBe("banner");
+  expect(short.written).toBe(0);
+  expect(xl("10003")!.cross_list_crns).toBe('["10004"]');
+  expect(xl("10001")!.cross_list_crns).toBe('["10002"]');
+  expect(xl("10002")!.cross_list_crns).toBe('["10001"]');
+
   await setMode("empty");
   const bad = await cf.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0 });
   expect(bad.source).toBe("banner");
@@ -186,6 +205,28 @@ test("changed description is reported", async () => {
   expect(r.changedDescriptions.length).toBe(1);
 });
 
+test("breaker: preflight rejection or 5 consecutive rejections trip; an accepted unit resets", () => {
+  type Outcome = "accepted" | "rejected" | "unmapped";
+  const run = (outcomes: Outcome[]) => {
+    let s = { attempted: 0, consecutive: 0, tripped: false };
+    const trace: boolean[] = [];
+    for (const o of outcomes) trace.push((s = cf.breakerStep(s, o)).tripped);
+    return { s, trace };
+  };
+  const A = "accepted", R = "rejected", U = "unmapped";
+  // The first attempted unit is the preflight.
+  expect(run([R]).s.tripped).toBe(true);
+  // Unmapped units are not attempted: the preflight is still the first real unit.
+  expect(run([U, U, A]).s).toEqual({ attempted: 1, consecutive: 0, tripped: false });
+  expect(run([U, R]).s.tripped).toBe(true);
+  // 4 consecutive rejections don't trip; the 5th does.
+  expect(run([A, R, R, R, R]).s.tripped).toBe(false);
+  expect(run([A, R, R, R, R, R]).trace).toEqual([false, false, false, false, false, true]);
+  // An accepted unit resets the count; unmapped units neither count nor reset.
+  expect(run([A, R, R, R, R, A, R, R, R, R]).s).toMatchObject({ consecutive: 4, tripped: false });
+  expect(run([A, R, R, U, R, R, U, R]).s.tripped).toBe(true);
+});
+
 test("notesFromFacts summarizes the run", () => {
   const notes = JSON.parse(
     cf.notesFromFacts(
@@ -201,5 +242,5 @@ test("notesFromFacts summarizes the run", () => {
       "banner"
     )
   );
-  expect(notes).toMatchObject({ crseavail: "degraded", unitsFallback: 2, crosslist: "banner" });
+  expect(notes).toMatchObject({ crseavail: "degraded", unitsFallback: 2, crosslist: "banner", noCampusCode: 0 });
 });

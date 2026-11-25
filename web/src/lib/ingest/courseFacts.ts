@@ -74,6 +74,8 @@ export interface CourseFactsResult {
   bannerCourses: number;
   /** Courses whose stored description changed (crseavail path). */
   changedDescriptions: CourseKey[];
+  /** Fallback units by reason (`breaker` = skipped after a trip, `off` = disabled). */
+  rejections?: Partial<Record<Rejection | "breaker" | "off", number>>;
 }
 
 export interface CourseFactsOptions {
@@ -315,7 +317,30 @@ export async function bannerCourseFacts(
   return { done, failed };
 }
 
-type Rejection = CrseavailError["reason"] | "count" | "crn-match" | "empty" | "no-campus-code";
+export type Rejection = CrseavailError["reason"] | "count" | "crn-match" | "empty" | "no-campus-code";
+
+export interface BreakerState {
+  attempted: number;
+  consecutive: number;
+  tripped: boolean;
+}
+
+/**
+ * Breaker bookkeeping for one unit outcome. The first attempted unit is the
+ * preflight (its rejection trips); otherwise BREAKER_CONSECUTIVE consecutive
+ * rejections trip, and an accepted unit resets the run. Unmapped units
+ * (`no-campus-code`) were never attempted and leave the state unchanged.
+ */
+export function breakerStep(s: BreakerState, outcome: "accepted" | "rejected" | "unmapped"): BreakerState {
+  if (s.tripped || outcome === "unmapped") return s;
+  if (outcome === "accepted") return { attempted: s.attempted + 1, consecutive: 0, tripped: false };
+  const consecutive = s.consecutive + 1;
+  return {
+    attempted: s.attempted + 1,
+    consecutive,
+    tripped: s.attempted === 0 || consecutive >= BREAKER_CONSECUTIVE,
+  };
+}
 
 export async function syncCourseFacts(
   db: D1Like,
@@ -343,7 +368,10 @@ export async function syncCourseFacts(
     written: 0,
     bannerCourses: 0,
     changedDescriptions: [],
+    rejections: {},
   };
+  const count = (reason: Rejection | "breaker" | "off", n = 1) =>
+    (result.rejections![reason] = (result.rejections![reason] ?? 0) + n);
   const pool: TermCourse[] = []; // Banner fallback candidates
   const toPool = (cs: TermCourse[]) => pool.push(...(opts.mode === "gaps" ? cs.filter(isGap) : cs));
 
@@ -357,8 +385,7 @@ export async function syncCourseFacts(
       if (!names.has(k)) names.set(k, lookupNames(db, term, campus, coll, dept, crn, nameSession, log));
       return names.get(k)!;
     };
-    let attempted = 0;
-    let consecutive = 0;
+    let breaker: BreakerState = { attempted: 0, consecutive: 0, tripped: false };
 
     for (const u of units) {
       if (pastDeadline(opts.deadline)) {
@@ -367,39 +394,40 @@ export async function syncCourseFacts(
       }
       const code = codes.get(u.campus);
       const unitName = `${term} ${code ?? JSON.stringify(u.campus)} ${u.subject}`;
-      const reject = (reason: Rejection, counts: boolean) => {
+      const reject = (reason: Rejection) => {
         logCa(`${unitName}: rejected (${reason}) → Banner`);
+        count(reason);
         result.unitsFallback += 1;
         toPool(u.courses);
-        if (!counts) return;
-        consecutive += 1;
-        if (attempted === 0 || consecutive >= BREAKER_CONSECUTIVE) {
-          result.breakerTripped = true;
-          result.source = "degraded";
-          logCa(`${term}: breaker tripped after ${unitName} (${reason}); Banner-only for the rest of the run`);
-        }
       };
 
-      if (result.breakerTripped) {
+      if (breaker.tripped) {
+        count("breaker");
         result.unitsFallback += 1;
         toPool(u.courses);
         continue;
       }
       if (!code) {
-        reject("no-campus-code", false);
+        reject("no-campus-code");
         continue;
       }
       const ca = { term, campusCode: code, subject: u.subject };
       const r = await fetchAndApplyUnit(db, u, ca, unitName, index, namesFor, result);
-      if (typeof r === "string") reject(r, true);
-      else {
-        consecutive = 0;
-        toPool(r); // courses absent from an accepted response
+      if (typeof r === "string") reject(r);
+      else toPool(r); // courses absent from an accepted response
+      breaker = breakerStep(breaker, typeof r === "string" ? "rejected" : "accepted");
+      if (breaker.tripped) {
+        result.breakerTripped = true;
+        logCa(`${term}: breaker tripped after ${unitName} (${r}); Banner-only for the rest of the run`);
       }
-      attempted += 1;
+    }
+    // Tripped, or every unit fell back (e.g. all unmapped): crseavail delivered nothing.
+    if (result.breakerTripped || (result.units > 0 && result.unitsFallback === result.units)) {
+      result.source = "degraded";
     }
   } else if (!enabled) {
     result.unitsFallback = units.length;
+    count("off", units.length);
     for (const u of units) toPool(u.courses);
   }
 
@@ -615,6 +643,8 @@ export function notesFromFacts(r: CourseFactsResult, crossList: string): string 
     units: r.units,
     unitsFallback: r.unitsFallback,
     breakerTripped: r.breakerTripped,
+    noCampusCode: r.rejections?.["no-campus-code"] ?? 0,
+    rejections: r.rejections ?? {},
     written: r.written,
     bannerCourses: r.bannerCourses,
     changedDescriptions: r.changedDescriptions.length,
