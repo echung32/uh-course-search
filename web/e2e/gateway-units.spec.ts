@@ -288,3 +288,166 @@ test("db:backup writes a consistent copy and prunes old ones", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Free-plan subrequest budget ─────────────────────────────────────────────
+// Every gateway call is a Worker fetch (~50/invocation on Free, shared with the
+// live Banner calls), so Worker-path DB helpers must cost O(1) — or O(depth) for
+// the prereq BFS — requests, not one per chunk/node. These run the real helpers
+// against a fully migrated DB through a counting gateway.
+
+async function startMigratedGateway(): Promise<Fixture & { calls: () => number }> {
+  const f = await startGateway();
+  const db = openSqliteFile(f.files.search);
+  for (const name of readdirSync("migrations").filter((n) => n.endsWith(".sql")).sort()) {
+    db.exec(readFileSync(join("migrations", name), "utf8"));
+  }
+  db.close();
+  let n = 0;
+  f.server.on("request", (req) => {
+    if (req.url === "/v1/query") n++;
+  });
+  return Object.assign(f, { calls: () => n });
+}
+
+function realisticSection(i: number) {
+  const crn = String(50000 + i);
+  const meeting = (begin: string, building: string) => ({
+    category: "01",
+    courseReferenceNumber: crn,
+    faculty: [],
+    meetingTime: {
+      beginTime: begin, endTime: "1315", startDate: "08/24/2026", endDate: "12/18/2026",
+      building, buildingDescription: `${building} Hall`, room: "204", campus: "MAN",
+      meetingType: "CLAS", meetingTypeDescription: "Class",
+      monday: true, tuesday: false, wednesday: true, thursday: false, friday: false, saturday: false, sunday: false,
+    },
+    term: "202740",
+  });
+  return {
+    id: i, term: "202740", termDesc: "Summer 2027", courseReferenceNumber: crn, partOfTerm: "1",
+    courseNumber: String(100 + i), subject: "BIOL", subjectDescription: "Biology", sequenceNumber: "001",
+    campusDescription: "University of Hawaii at Manoa", scheduleTypeDescription: "Lecture",
+    courseTitle: `Course ${i}`, creditHours: 3, creditHourLow: 3, creditHourHigh: null,
+    maximumEnrollment: 40, enrollment: 30, seatsAvailable: 10, waitCapacity: 0, waitCount: 0, waitAvailable: 0,
+    openSection: true, linkIdentifier: null, isSectionLinked: false, subjectCourse: `BIOL${100 + i}`,
+    faculty: [
+      { bannerId: `${i}a`, category: null, courseReferenceNumber: crn, displayName: "A Prof", emailAddress: "a@x.edu", primaryIndicator: true, term: "202740" },
+      { bannerId: `${i}b`, category: null, courseReferenceNumber: crn, displayName: "B Prof", emailAddress: "b@x.edu", primaryIndicator: false, term: "202740" },
+    ],
+    meetingsFaculty: [meeting("1200", "AGSCI"), meeting("1400", "BIOMED")],
+    reservedSeatSummary: null,
+    sectionAttributes: [
+      { code: "WI", description: "Writing Intensive", courseReferenceNumber: crn, termCode: "202740" },
+      { code: "DS", description: "Diversification", courseReferenceNumber: crn, termCode: "202740" },
+    ],
+  };
+}
+
+test.describe("gateway request budget", () => {
+  let f: Fixture & { calls: () => number };
+  test.beforeEach(async () => {
+    f = await startMigratedGateway();
+  });
+  test.afterEach(async () => {
+    await stopGateway(f);
+  });
+
+  test("upsertSections writes a 50-section page-cache window in one gateway request", async () => {
+    const { upsertSections } = await import("../src/lib/db/upsert");
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    const sections = Array.from({ length: 50 }, (_, i) => realisticSection(i)) as never[];
+    const before = f.calls();
+    expect(await upsertSections(db, sections, 1764000000000)).toBe(50);
+    expect(f.calls() - before).toBe(1);
+
+    const check = openSqliteFile(f.files.search);
+    const count = (t: string) => (check.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE term = '202740'`).get() as { n: number }).n;
+    expect([count("course_section"), count("section_faculty"), count("section_meeting"), count("section_attribute")]).toEqual([50, 100, 100, 100]);
+    check.close();
+
+    // Re-upserting the same window refreshes children in place (no duplicates).
+    await upsertSections(db, sections, 1764000000001);
+    const again = openSqliteFile(f.files.search);
+    expect((again.prepare("SELECT COUNT(*) AS n FROM section_meeting").get() as { n: number }).n).toBe(100);
+    again.close();
+  });
+
+  test("insertSectionsAndChildren and deleteSectionsAndChildren each take one gateway request", async () => {
+    const { insertSectionsAndChildren, deleteSectionsAndChildren } = await import("../src/lib/db/upsert");
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    const sections = Array.from({ length: 50 }, (_, i) => realisticSection(i)) as never[];
+    let before = f.calls();
+    expect(await insertSectionsAndChildren(db, sections, 1)).toBe(50);
+    expect(f.calls() - before).toBe(1);
+    before = f.calls();
+    await deleteSectionsAndChildren(db, "202740", sections.map((s: { courseReferenceNumber: string }) => s.courseReferenceNumber));
+    expect(f.calls() - before).toBe(1);
+    const check = openSqliteFile(f.files.search);
+    expect((check.prepare("SELECT COUNT(*) AS n FROM section_faculty").get() as { n: number }).n).toBe(0);
+    check.close();
+  });
+
+  test("getPrereqSubgraph needs O(depth) gateway requests on a branching graph", async () => {
+    const { getPrereqSubgraph } = await import("../src/lib/db/prereqQueries");
+    // ROOT100 needs 5 courses, each needing 3 more (5 + 15 = 20 prereq nodes);
+    // ROOT100 also unlocks 4 courses. Every node is offered (has a section).
+    const seed = openSqliteFile(f.files.search);
+    const campus = "University of Hawaii at Manoa";
+    const edge = seed.prepare(
+      "INSERT INTO prereq_edge (term, campus, prereq_course_id, course_id, group_index, alt_index, prereq_offered) VALUES ('202740', ?, ?, ?, 0, ?, 1)"
+    );
+    const section = seed.prepare(
+      "INSERT INTO course_section (term, crn, subject, course_number, subject_course, course_title, campus_description, raw_json, synced_at) VALUES ('202740', ?, 'X', ?, ?, ?, ?, '{}', 0)"
+    );
+    const ids = new Set<string>(["X100"]);
+    for (let a = 0; a < 5; a++) {
+      const mid = `X2${a}0`;
+      ids.add(mid);
+      edge.run(campus, mid, "X100", a);
+      for (let b = 0; b < 3; b++) {
+        const leaf = `X3${a}${b}`;
+        ids.add(leaf);
+        edge.run(campus, leaf, mid, b);
+      }
+    }
+    for (let u = 0; u < 4; u++) {
+      ids.add(`X4${u}0`);
+      edge.run(campus, "X100", `X4${u}0`, 0);
+    }
+    let crn = 1;
+    for (const id of ids) section.run(String(crn++), id.slice(1), id, `Title ${id}`, campus);
+    seed.close();
+
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    const before = f.calls();
+    const g = await getPrereqSubgraph(db, { term: "202740", campus, course: "X100", direction: "both", depth: 3 });
+    const calls = f.calls() - before;
+
+    expect(g.nodes).toHaveLength(ids.size); // 1 + 5 + 15 + 4 = 25
+    expect(g.edges).toHaveLength(5 + 15 + 4);
+    expect(g.nodes.every((n) => n.offered && n.title === `Title ${n.id}`)).toBe(true);
+    // ≤ one request per (direction, level) + one node hydration + one AST lookup.
+    expect(calls).toBeLessThanOrEqual(2 * 3 + 2);
+  });
+});
+
+test("db:backup rejects a non-numeric --keepDays without deleting anything", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uhcs-bak-"));
+  const backups = join(dir, "backups");
+  mkdirSync(backups);
+  const files = { search: join(dir, "search.sqlite"), analytics: join(dir, "analytics.sqlite") };
+  try {
+    for (const path of Object.values(files)) new DatabaseSync(path).close();
+    writeFileSync(join(backups, "search-2000-01-01.sqlite"), "old");
+    expect(() =>
+      execFileSync("yarn", ["db:backup", "--dir", backups, "--keepDays", "14d"], {
+        encoding: "utf8",
+        stdio: "pipe",
+        env: { ...process.env, SEARCH_D1_LOCAL_FILE: files.search, ANALYTICS_D1_LOCAL_FILE: files.analytics },
+      })
+    ).toThrow();
+    expect(readdirSync(backups)).toEqual(["search-2000-01-01.sqlite"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

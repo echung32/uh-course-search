@@ -20,7 +20,14 @@ function arg(name: string): string | undefined {
 }
 
 const dir = arg("dir") ?? "/data/backups";
-const keepDays = Number(arg("keepDays") ?? 14);
+const keepDaysRaw = arg("keepDays") ?? "14";
+// Strictly a non-negative integer: Number("14d") is NaN, which would make the
+// prune cutoff "Invalid Date" — and every dated name sorts below that string.
+if (!/^\d+$/.test(keepDaysRaw)) {
+  console.error(`--keepDays must be a non-negative integer (got "${keepDaysRaw}")`);
+  process.exit(1);
+}
+const keepDays = Number(keepDaysRaw);
 const sources = {
   search: process.env.SEARCH_D1_LOCAL_FILE,
   analytics: process.env.ANALYTICS_D1_LOCAL_FILE,

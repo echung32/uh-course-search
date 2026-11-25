@@ -36,19 +36,27 @@ export async function getCurrentPrereqTerm(db: D1Like): Promise<string | null> {
   return newest?.code ?? null;
 }
 
-async function neighbors(
-  db: D1Like, term: string, campus: string, id: string, direction: "prereqs" | "unlocks"
-): Promise<EdgeRow[]> {
+/**
+ * The edge rows touching each of `ids` (one batch = one gateway request/Worker
+ * subrequest per BFS level, instead of one per frontier node). Results are
+ * returned in `ids` order so traversal order matches the per-node walk.
+ */
+async function neighborsOf(
+  db: D1Like, term: string, campus: string, ids: string[], direction: "prereqs" | "unlocks"
+): Promise<EdgeRow[][]> {
   const col = direction === "prereqs" ? "course_id" : "prereq_course_id";
-  const { results } = await db
-    .prepare(
-      `SELECT prereq_course_id, course_id, group_index, alt_index, min_grade, concurrent
-         FROM prereq_edge
-        WHERE term = ? AND campus = ? AND ${col} = ?`
+  const results = await db.batch(
+    ids.map((id) =>
+      db
+        .prepare(
+          `SELECT prereq_course_id, course_id, group_index, alt_index, min_grade, concurrent
+             FROM prereq_edge
+            WHERE term = ? AND campus = ? AND ${col} = ?`
+        )
+        .bind(term, campus, id)
     )
-    .bind(term, campus, id)
-    .all<EdgeRow>();
-  return results;
+  );
+  return results.map((r) => r.results as unknown as EdgeRow[]);
 }
 
 export async function getPrereqSubgraph(
@@ -69,8 +77,8 @@ export async function getPrereqSubgraph(
     const visited = new Set<string>([start]);
     for (let d = 0; d < depth && frontier.length; d++) {
       const next: string[] = [];
-      for (const id of frontier) {
-        for (const e of await neighbors(db, term, campus, id, dir)) {
+      for (const rows of await neighborsOf(db, term, campus, frontier, dir)) {
+        for (const e of rows) {
           const key = `${e.prereq_course_id}|${e.course_id}|${e.group_index}|${e.alt_index}`;
           if (!edgeKeys.has(key)) {
             edgeKeys.add(key);
@@ -89,27 +97,34 @@ export async function getPrereqSubgraph(
     }
   }
 
-  // Hydrate node metadata (subject/number/title/offered) from course_section.
-  const nodes: GraphNode[] = [];
-  for (const id of nodeIds) {
-    const row = await db
-      .prepare(
-        `SELECT subject, course_number, MAX(course_title) AS title
-           FROM course_section
-          WHERE term = ? AND campus_description = ? AND REPLACE(subject_course, ' ', '') = ?
-          GROUP BY subject, course_number LIMIT 1`
-      )
-      .bind(term, campus, id)
-      .first<{ subject: string; course_number: string; title: string | null }>();
-    nodes.push({
+  // Hydrate node metadata (subject/number/title/offered) from course_section —
+  // one batch for every node (one gateway request, not one per node).
+  const ids = [...nodeIds];
+  const hydrated = await db.batch(
+    ids.map((id) =>
+      db
+        .prepare(
+          `SELECT subject, course_number, MAX(course_title) AS title
+             FROM course_section
+            WHERE term = ? AND campus_description = ? AND REPLACE(subject_course, ' ', '') = ?
+            GROUP BY subject, course_number LIMIT 1`
+        )
+        .bind(term, campus, id)
+    )
+  );
+  const nodes: GraphNode[] = ids.map((id, i) => {
+    const row = hydrated[i]?.results[0] as
+      | { subject: string; course_number: string; title: string | null }
+      | undefined;
+    return {
       id,
       // Assumes all-alpha subject codes (true for UH today): strip trailing digits for subject, leading letters for number.
       subject: row?.subject ?? id.replace(/\d.*$/, ""),
       number: row?.course_number ?? id.replace(/^\D+/, ""),
       title: row?.title ?? null,
       offered: !!row,
-    });
-  }
+    };
+  });
 
   const astRow = await db
     .prepare("SELECT ast_json FROM course_prereq WHERE term = ? AND campus = ? AND course_id = ?")

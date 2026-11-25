@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { fetchTermSyncMeta } from "@/lib/search";
+import { readTermMeta } from "@/lib/api/termMeta";
 import { runCrnLookup, runSearch } from "@/lib/api/search";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from "@/lib/pageSize";
@@ -101,7 +101,9 @@ export const GET: APIRoute = async ({ request }) => {
   // the sync state, so they're edge-cached under a key versioned by the sync
   // timestamps. Dynamic/unknown terms get null back and stay uncached — their
   // reads fill D1 (page cache / crnLazy) and must keep reaching it.
-  const meta = await fetchTermSyncMeta(term);
+  const read = await readTermMeta(term);
+  if (!read.ok) return read.response;
+  const meta = read.meta;
   const profile = termCacheProfile(meta);
   const produce = () => handleSearch(request, term, meta);
   return profile ? withEdgeCache(request, profile, produce) : produce();
