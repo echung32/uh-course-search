@@ -186,3 +186,9 @@ export interface SearchParams {
   sortColumn?: string;
   sortDirection?: string;
 }
+
+/** An inclusive meeting date range, as Banner `MM/DD/YYYY` strings. */
+export interface DateRange {
+  start: string;
+  end: string;
+}
