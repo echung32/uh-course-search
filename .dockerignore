@@ -7,9 +7,12 @@ node_modules
 .pnp.cjs
 .pnp.loader.mjs
 .venv
+# Local secrets must never enter the build context (they'd be baked into a layer).
 **/.env
 **/.env.*
 !**/.env.example
+**/.dev.vars
+**/.dev.vars.*
 web/.wrangler
 web/.wrangler-e2e
 web/.astro

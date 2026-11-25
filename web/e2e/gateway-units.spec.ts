@@ -23,7 +23,7 @@ interface Fixture {
   server: Server;
 }
 
-async function startGateway(): Promise<Fixture> {
+async function startGateway(log?: (line: string) => void): Promise<Fixture> {
   const dir = mkdtempSync(join(tmpdir(), "uhcs-gw-"));
   const files = { search: join(dir, "search.sqlite"), analytics: join(dir, "analytics.sqlite") };
   const s = new DatabaseSync(files.search);
@@ -32,7 +32,7 @@ async function startGateway(): Promise<Fixture> {
   const a = new DatabaseSync(files.analytics);
   a.exec("CREATE TABLE a (x INTEGER)");
   a.close();
-  const server = createGatewayServer({ secret: SECRET, files });
+  const server = createGatewayServer({ secret: SECRET, files, log });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const { port } = server.address() as AddressInfo;
   return { dir, files, url: `http://127.0.0.1:${port}`, server };
@@ -295,8 +295,9 @@ test("db:backup writes a consistent copy and prunes old ones", () => {
 // the prereq BFS — requests, not one per chunk/node. These run the real helpers
 // against a fully migrated DB through a counting gateway.
 
-async function startMigratedGateway(): Promise<Fixture & { calls: () => number }> {
-  const f = await startGateway();
+async function startMigratedGateway(): Promise<Fixture & { calls: () => number; lines: string[] }> {
+  const lines: string[] = [];
+  const f = Object.assign(await startGateway((l) => lines.push(l)), { lines });
   const db = openSqliteFile(f.files.search);
   for (const name of readdirSync("migrations").filter((n) => n.endsWith(".sql")).sort()) {
     db.exec(readFileSync(join("migrations", name), "utf8"));
@@ -344,7 +345,7 @@ function realisticSection(i: number) {
 }
 
 test.describe("gateway request budget", () => {
-  let f: Fixture & { calls: () => number };
+  let f: Fixture & { calls: () => number; lines: string[] };
   test.beforeEach(async () => {
     f = await startMigratedGateway();
   });
@@ -428,6 +429,13 @@ test.describe("gateway request budget", () => {
     expect(g.nodes.every((n) => n.offered && n.title === `Title ${n.id}`)).toBe(true);
     // ≤ one request per (direction, level) + one node hydration + one AST lookup.
     expect(calls).toBeLessThanOrEqual(2 * 3 + 2);
+    // …and each request is set-based (one IN-list statement per ≤90 ids), not one
+    // statement per node: the gateway runs SQLite synchronously, so N per-node
+    // scans of course_section would stall every other request behind this one.
+    const perRequest = f.lines
+      .slice(-calls)
+      .map((l) => Number(/ n=(\d+) /.exec(l)?.[1] ?? 0));
+    expect(Math.max(...perRequest)).toBe(1);
   });
 });
 
@@ -450,4 +458,74 @@ test("db:backup rejects a non-numeric --keepDays without deleting anything", () 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test.describe("gateway hardening", () => {
+  let f: Fixture & { calls: () => number; lines: string[] };
+  test.beforeEach(async () => {
+    f = await startMigratedGateway();
+  });
+  test.afterEach(async () => {
+    await stopGateway(f);
+  });
+
+  test("deleteSectionsAndChildren also removes the section's section_detail row", async () => {
+    // D1 enforces FKs, so ON DELETE CASCADE dropped section_detail with its
+    // section; the home SQLite runs with FKs off, so the delete must be explicit.
+    const { insertSectionsAndChildren, deleteSectionsAndChildren } = await import("../src/lib/db/upsert");
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    await insertSectionsAndChildren(db, [realisticSection(1)] as never[], 1);
+    const seed = openSqliteFile(f.files.search);
+    seed.prepare("INSERT INTO section_detail (term, crn, synced_at) VALUES ('202740', '50001', 1)").run();
+    seed.close();
+    await deleteSectionsAndChildren(db, "202740", ["50001"]);
+    const check = openSqliteFile(f.files.search);
+    expect((check.prepare("SELECT COUNT(*) AS n FROM section_detail").get() as { n: number }).n).toBe(0);
+    check.close();
+  });
+
+  test("gateway refuses ATTACH and VACUUM INTO (no file access beyond its own DBs)", async () => {
+    const target = join(f.dir, "exfil.sqlite");
+    for (const sql of [`ATTACH DATABASE '${target}' AS x`, `VACUUM INTO '${target}'`]) {
+      const { status } = await query(f, one(sql));
+      expect(status, sql).toBe(400);
+    }
+    expect(existsSync(target)).toBe(false);
+    // Ordinary statements still work.
+    expect((await query(f, one("SELECT COUNT(*) AS n FROM term"))).status).toBe(200);
+  });
+});
+
+test("db:backup failing mid-run keeps the existing same-day copy", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uhcs-bak-"));
+  const backups = join(dir, "backups");
+  mkdirSync(backups);
+  const today = new Date().toLocaleDateString("en-CA");
+  const good = join(backups, `search-${today}.sqlite`);
+  try {
+    const db = new DatabaseSync(good);
+    db.exec("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('good')");
+    db.close();
+    const badSource = join(dir, "not-a-db");
+    mkdirSync(badSource); // opening a directory as SQLite fails
+    expect(() =>
+      execFileSync("yarn", ["db:backup", "--dir", backups], {
+        encoding: "utf8",
+        stdio: "pipe",
+        env: { ...process.env, SEARCH_D1_LOCAL_FILE: badSource, ANALYTICS_D1_LOCAL_FILE: badSource },
+      })
+    ).toThrow();
+    const copy = new DatabaseSync(good, { readOnly: true });
+    expect(copy.prepare("SELECT v FROM t").get()).toEqual({ v: "good" });
+    copy.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("RefreshWorkflow is disabled while the home gateway is active", async () => {
+  const { workflowRefreshDisabled } = await import("../src/workflows/refreshGuard");
+  expect(workflowRefreshDisabled({ DB_GATEWAY_URL: "https://db.example" })).toMatch(/home/i);
+  expect(workflowRefreshDisabled({ DB_GATEWAY_URL: "" })).toBeNull();
+  expect(workflowRefreshDisabled({})).toBeNull();
 });

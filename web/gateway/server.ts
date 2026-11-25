@@ -16,7 +16,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { localSqliteD1 } from "../src/lib/db/client";
+import { constants as sqlite } from "node:sqlite";
+import { localSqliteD1, openSqliteFile } from "../src/lib/db/client";
 import type { D1Like, D1Result } from "../src/lib/db/types";
 
 export type GatewayDbName = "search" | "analytics";
@@ -103,7 +104,16 @@ export function createGatewayServer(opts: GatewayOptions): Server {
     let db = dbs.get(name);
     if (!db) {
       const f = opts.files[name];
-      db = localSqliteD1(typeof f === "function" ? f() : f);
+      const conn = openSqliteFile(typeof f === "function" ? f() : f);
+      // Callers get SQL, not the filesystem: refuse ATTACH/DETACH (which is also
+      // how VACUUM INTO writes its target), so a leaked credential can't read or
+      // write files beyond this connection's own database.
+      conn.setAuthorizer((action) =>
+        action === sqlite.SQLITE_ATTACH || action === sqlite.SQLITE_DETACH
+          ? sqlite.SQLITE_DENY
+          : sqlite.SQLITE_OK
+      );
+      db = localSqliteD1(conn);
       dbs.set(name, db);
     }
     return db;

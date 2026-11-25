@@ -230,10 +230,11 @@ export function openSqliteFile(path: string): DatabaseSync {
   return db;
 }
 
-export function localSqliteD1(filePath?: string): D1Like {
-  const db = openSqliteFile(
-    filePath ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE")
-  );
+export function localSqliteD1(file?: string | DatabaseSync): D1Like {
+  const db =
+    file instanceof DatabaseSync
+      ? file
+      : openSqliteFile(file ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE"));
   return {
     prepare(query: string) {
       return localStatement(db, query, []);

@@ -10,7 +10,7 @@
  * Env: SEARCH_D1_LOCAL_FILE, ANALYTICS_D1_LOCAL_FILE (the live files).
  * Usage: yarn db:backup [--dir /data/backups] [--keepDays 14]
  */
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openSqliteFile } from "@/lib/db/client";
 
@@ -39,12 +39,22 @@ const today = localDate(new Date());
 for (const [name, path] of Object.entries(sources)) {
   if (!path) throw new Error(`${name === "search" ? "SEARCH" : "ANALYTICS"}_D1_LOCAL_FILE is required`);
   const target = join(dir, `${name}-${today}.sqlite`);
-  rmSync(target, { force: true }); // VACUUM INTO refuses an existing file
-  const db = openSqliteFile(path);
+  // Write to a temp file and rename over the dated copy only on success, so a
+  // failed or interrupted re-run (full disk, unreadable source) never destroys
+  // the newest good backup. Same directory ⇒ rename is atomic.
+  const tmp = join(dir, `.${name}-${today}.${process.pid}.tmp`);
+  rmSync(tmp, { force: true });
   try {
-    db.prepare("VACUUM INTO ?").run(target);
-  } finally {
-    db.close();
+    const db = openSqliteFile(path);
+    try {
+      db.prepare("VACUUM INTO ?").run(tmp);
+    } finally {
+      db.close();
+    }
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
   }
   console.log(`backed up ${name} → ${target}`);
 }

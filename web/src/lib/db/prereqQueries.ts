@@ -5,7 +5,7 @@
  * PK prefix; reverse ("unlocks") walks prereq_course_id -> course_id via
  * idx_prereq_edge_reverse. Cycle-guarded by a visited set.
  */
-import type { D1Like } from "@/lib/db/types";
+import type { D1Like, D1PreparedStatement } from "@/lib/db/types";
 
 export interface GraphNode { id: string; subject: string; number: string; title: string | null; offered: boolean; }
 export interface GraphEdge {
@@ -36,27 +36,46 @@ export async function getCurrentPrereqTerm(db: D1Like): Promise<string | null> {
   return newest?.code ?? null;
 }
 
-/**
- * The edge rows touching each of `ids` (one batch = one gateway request/Worker
- * subrequest per BFS level, instead of one per frontier node). Results are
- * returned in `ids` order so traversal order matches the per-node walk.
- */
-async function neighborsOf(
-  db: D1Like, term: string, campus: string, ids: string[], direction: "prereqs" | "unlocks"
-): Promise<EdgeRow[][]> {
-  const col = direction === "prereqs" ? "course_id" : "prereq_course_id";
+/** ≤90 ids per IN-list keeps binds (term + campus + ids) under D1's 100-param cap. */
+const IN_CHUNK = 90;
+
+function chunkIds(ids: string[]): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) out.push(ids.slice(i, i + IN_CHUNK));
+  return out;
+}
+
+/** Runs `build` once per ≤90-id chunk in ONE batch (one gateway request) and concatenates rows. */
+async function batchedRows<T>(
+  db: D1Like,
+  ids: string[],
+  build: (chunk: string[], inList: string) => D1PreparedStatement
+): Promise<T[]> {
+  if (ids.length === 0) return [];
   const results = await db.batch(
-    ids.map((id) =>
-      db
-        .prepare(
-          `SELECT prereq_course_id, course_id, group_index, alt_index, min_grade, concurrent
-             FROM prereq_edge
-            WHERE term = ? AND campus = ? AND ${col} = ?`
-        )
-        .bind(term, campus, id)
-    )
+    chunkIds(ids).map((c) => build(c, c.map(() => "?").join(",")))
   );
-  return results.map((r) => r.results as unknown as EdgeRow[]);
+  return results.flatMap((r) => r.results as unknown as T[]);
+}
+
+/**
+ * Every edge touching any of `ids` in one direction — one set-based statement per
+ * ≤90 ids, all in one batch, so a BFS level is one gateway request (one Worker
+ * subrequest) and the gateway does one index range scan per chunk, not per node.
+ */
+async function levelNeighbors(
+  db: D1Like, term: string, campus: string, ids: string[], direction: "prereqs" | "unlocks"
+): Promise<EdgeRow[]> {
+  const col = direction === "prereqs" ? "course_id" : "prereq_course_id";
+  return batchedRows<EdgeRow>(db, ids, (c, inList) =>
+    db
+      .prepare(
+        `SELECT prereq_course_id, course_id, group_index, alt_index, min_grade, concurrent
+           FROM prereq_edge
+          WHERE term = ? AND campus = ? AND ${col} IN (${inList})`
+      )
+      .bind(term, campus, ...c)
+  );
 }
 
 export async function getPrereqSubgraph(
@@ -77,45 +96,47 @@ export async function getPrereqSubgraph(
     const visited = new Set<string>([start]);
     for (let d = 0; d < depth && frontier.length; d++) {
       const next: string[] = [];
-      for (const rows of await neighborsOf(db, term, campus, frontier, dir)) {
-        for (const e of rows) {
-          const key = `${e.prereq_course_id}|${e.course_id}|${e.group_index}|${e.alt_index}`;
-          if (!edgeKeys.has(key)) {
-            edgeKeys.add(key);
-            edges.push({
-              from: e.prereq_course_id, to: e.course_id,
-              groupIndex: e.group_index, altIndex: e.alt_index,
-              grade: e.min_grade, concurrent: e.concurrent,
-            });
-          }
-          const neighborId = dir === "prereqs" ? e.prereq_course_id : e.course_id;
-          nodeIds.add(neighborId);
-          if (!visited.has(neighborId)) { visited.add(neighborId); next.push(neighborId); }
+      for (const e of await levelNeighbors(db, term, campus, frontier, dir)) {
+        const key = `${e.prereq_course_id}|${e.course_id}|${e.group_index}|${e.alt_index}`;
+        if (!edgeKeys.has(key)) {
+          edgeKeys.add(key);
+          edges.push({
+            from: e.prereq_course_id, to: e.course_id,
+            groupIndex: e.group_index, altIndex: e.alt_index,
+            grade: e.min_grade, concurrent: e.concurrent,
+          });
         }
+        const neighborId = dir === "prereqs" ? e.prereq_course_id : e.course_id;
+        nodeIds.add(neighborId);
+        if (!visited.has(neighborId)) { visited.add(neighborId); next.push(neighborId); }
       }
       frontier = next;
     }
   }
 
-  // Hydrate node metadata (subject/number/title/offered) from course_section —
-  // one batch for every node (one gateway request, not one per node).
+  // Hydrate node metadata (subject/number/title/offered) from course_section,
+  // set-based: one grouped scan of the term's sections per ≤90 ids (the gateway
+  // runs SQLite synchronously — a per-node scan for a deep graph would stall
+  // every other request behind this one).
   const ids = [...nodeIds];
-  const hydrated = await db.batch(
-    ids.map((id) =>
+  const rows = await batchedRows<{ id: string; subject: string; course_number: string; title: string | null }>(
+    db,
+    ids,
+    (c, inList) =>
       db
         .prepare(
-          `SELECT subject, course_number, MAX(course_title) AS title
+          `SELECT REPLACE(subject_course, ' ', '') AS id,
+                  MIN(subject) AS subject, MIN(course_number) AS course_number,
+                  MAX(course_title) AS title
              FROM course_section
-            WHERE term = ? AND campus_description = ? AND REPLACE(subject_course, ' ', '') = ?
-            GROUP BY subject, course_number LIMIT 1`
+            WHERE term = ? AND campus_description = ? AND REPLACE(subject_course, ' ', '') IN (${inList})
+            GROUP BY REPLACE(subject_course, ' ', '')`
         )
-        .bind(term, campus, id)
-    )
+        .bind(term, campus, ...c)
   );
-  const nodes: GraphNode[] = ids.map((id, i) => {
-    const row = hydrated[i]?.results[0] as
-      | { subject: string; course_number: string; title: string | null }
-      | undefined;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const nodes: GraphNode[] = ids.map((id) => {
+    const row = byId.get(id);
     return {
       id,
       // Assumes all-alpha subject codes (true for UH today): strip trailing digits for subject, leading letters for number.

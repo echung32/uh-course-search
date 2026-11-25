@@ -40,13 +40,17 @@
   // see deploy/home/) because Free-plan Workers can't make the hundreds of
   // Banner subrequests a sync step needs. History: the schedule was 08:00 UTC =
   // 22:00 HST, chosen to finish before Banner's ~02:00 HST maintenance window and
-  // never overlap the next fire. Re-add `"schedules": ["0 8 * * *"]` to move the
+  // never overlap the next fire. Set `"schedules": ["0 8 * * *"]` to move the
   // refresh back onto Workers (needs Workers Paid).
   "workflows": [
     {
       "binding": "REFRESH_WORKFLOW",
       "name": "uh-course-search-refresh",
       "class_name": "RefreshWorkflow"
+      // No `schedules`. Wrangler rejects an empty array, and omitting the field
+      // may leave a previously deployed cron in place. So RefreshWorkflow.run
+      // also exits immediately while DB_GATEWAY_URL is set (refreshGuard.ts):
+      // a leftover cron can't double-refresh alongside the home cron.
     }
   ],
   // Cloudflare native Rate Limiting binding (GA) for the MCP server. Gates

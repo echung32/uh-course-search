@@ -126,7 +126,9 @@ function deleteStatements(
   includeSections: boolean
 ): D1PreparedStatement[] {
   const tables = ["section_attribute", "section_faculty", "section_meeting"];
-  if (includeSections) tables.push("course_section");
+  // Dropping a section also drops its detail row: D1 enforces FKs (ON DELETE
+  // CASCADE did this implicitly), the self-hosted SQLite runs with FKs off.
+  if (includeSections) tables.push("section_detail", "course_section");
   return chunk(crns, 90).flatMap((part) => {
     const inList = part.map(() => "?").join(",");
     return tables.map((t) =>

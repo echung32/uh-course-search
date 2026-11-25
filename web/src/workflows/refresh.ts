@@ -1,5 +1,6 @@
 // src/workflows/refresh.ts
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { workflowRefreshDisabled } from "./refreshGuard";
 import { getDb, getAnalyticsDb } from "@/lib/db/binding";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { computeTermRollups } from "@/lib/ingest/rollups";
@@ -73,6 +74,11 @@ function chunk<T>(a: T[], n: number): T[][] {
 
 export class RefreshWorkflow extends WorkflowEntrypoint {
   async run(_event: WorkflowEvent<unknown>, step: WorkflowStep): Promise<void> {
+    const skip = workflowRefreshDisabled(this.env as Record<string, unknown>);
+    if (skip) {
+      console.log(`[RefreshWorkflow] skipped: ${skip}`);
+      return;
+    }
     const db = getDb();
 
     const codes = await step.do("refresh term list", async () => {
