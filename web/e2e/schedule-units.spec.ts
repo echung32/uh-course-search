@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { localSqliteD1, openSqliteFile } from "../src/lib/db/client";
 import { pickUsualDateRange, refreshTermUsualDates } from "../src/lib/db/usualDates";
+import { termCacheProfile } from "../src/lib/edgeCache";
 
 function mt(overrides: Partial<MeetingTime> = {}): MeetingTime {
   return {
@@ -176,4 +177,11 @@ test("migration 0015 refills NULL section_meeting.begin_date from raw_json", () 
     db.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("termCacheProfile re-keys when the usual date range changes", () => {
+  const base = { lastSyncedAt: 1_700_000_000_000, isViewOnly: true };
+  const before = termCacheProfile({ ...base, usualDateRange: null });
+  const after = termCacheProfile({ ...base, usualDateRange: { start: "01/11/2027", end: "05/14/2027" } });
+  expect(before?.version).not.toBe(after?.version);
 });

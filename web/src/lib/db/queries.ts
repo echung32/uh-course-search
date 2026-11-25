@@ -5,6 +5,7 @@
 import type {
   AutocompleteItem,
   CourseSection,
+  DateRange,
   CoverageDetail,
   SearchCoverage,
   SearchParams,
@@ -75,6 +76,8 @@ export interface TermSyncMeta {
   lastSyncedAt: number | null;
   /** Past terms (description ends "(View Only)") are immutable. */
   isViewOnly: boolean;
+  /** Most meetings' date range (see db/usualDates.ts); null when none / not computed. */
+  usualDateRange: DateRange | null;
 }
 
 /**
@@ -89,17 +92,23 @@ export async function getTermSyncMeta(
 ): Promise<TermSyncMeta | null> {
   const row = await db
     .prepare(
-      "SELECT last_synced_at, is_view_only FROM term WHERE code = ?"
+      "SELECT last_synced_at, is_view_only, usual_start_date, usual_end_date FROM term WHERE code = ?"
     )
     .bind(term)
     .first<{
       last_synced_at: number | null;
       is_view_only: number;
+      usual_start_date: string | null;
+      usual_end_date: string | null;
     }>();
   if (!row) return null;
   return {
     lastSyncedAt: row.last_synced_at,
     isViewOnly: row.is_view_only === 1,
+    usualDateRange:
+      row.usual_start_date && row.usual_end_date
+        ? { start: row.usual_start_date, end: row.usual_end_date }
+        : null,
   };
 }
 

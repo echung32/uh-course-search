@@ -46,6 +46,7 @@ export async function runSearch(
   const results = viaPageCache
     ? await fetchSearchPage(params)
     : await fetchSearchResults(params);
+  results.usualDateRange = resolvedMeta?.usualDateRange ?? null;
   if (viaPageCache) {
     results.coverage = await fetchCoverageSummary(params, results.totalCount);
   } else if (results.totalCount > 0 && resolvedMeta?.lastSyncedAt != null) {

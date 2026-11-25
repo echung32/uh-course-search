@@ -600,3 +600,14 @@ test("does not prefetch the next page for a dynamic (un-backfilled) term", async
   await page.waitForTimeout(500);
   expect(offsets.filter((o) => o === 25).length).toBe(prefetchesBefore);
 });
+
+test("search responses carry the term's usualDateRange", async ({ request }) => {
+  const usual = { start: "08/25/2025", end: "12/12/2025" };
+  const search = await (await request.get("/api/search?term=202710&subject=ICS")).json();
+  expect(search.usualDateRange).toEqual(usual);
+  const crn = await (await request.get("/api/search?term=202710&crn=10004")).json();
+  expect(crn.usualDateRange).toEqual(usual);
+  // A term with no computed range reports null (→ every meeting shows its dates).
+  const none = await (await request.get("/api/search?term=202610&subject=ICS")).json();
+  expect(none.usualDateRange).toBeNull();
+});

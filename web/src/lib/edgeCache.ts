@@ -56,7 +56,9 @@ export interface CacheProfile {
 export function termCacheProfile(meta: TermSyncMeta | null): CacheProfile | null {
   if (meta?.lastSyncedAt == null) return null;
   return {
-    version: String(meta.lastSyncedAt),
+    // The usual date range is part of every search response, so a change to it
+    // (e.g. the one-time `yarn ingest usual-dates`) must re-key cached entries.
+    version: `${meta.lastSyncedAt}:${meta.usualDateRange?.start ?? ""}-${meta.usualDateRange?.end ?? ""}`,
     ttlSeconds: meta.isViewOnly ? VIEW_ONLY_TTL_S : ACTIVE_TTL_S,
   };
 }

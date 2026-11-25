@@ -196,6 +196,12 @@ export default async function globalSetup() {
   // Negative display_order keeps it out of the read-path search tests' dropdown.
   // "(View Only)" in the description exercises the chart label trimming.
   term.run("202610", "Fall 2025 (View Only)", -10, SYNCED);
+  // The read-path term's usual meeting date range (normally computed after a
+  // sync; see src/lib/db/usualDates.ts) — matches SECTIONS[3]'s meeting, so only
+  // off-range meetings get a date line in the Schedule column.
+  db.exec(
+    "UPDATE term SET usual_start_date = '08/25/2025', usual_end_date = '12/12/2025' WHERE code = '202710'"
+  );
 
   const insert = db.prepare(
     `INSERT INTO course_section
