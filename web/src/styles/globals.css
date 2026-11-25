@@ -91,3 +91,58 @@
     color: hsl(var(--foreground));
   }
 }
+
+/*
+ * Auto-search indicator (SearchForm). While a typed field (course number / CRN)
+ * is waiting out its debounce, the Search icon becomes a ring that empties and
+ * the footer's divider fills left→right over the same duration; while the
+ * request is in flight a short bar slides along the divider. The duration comes
+ * from an inline `animation-duration` so it stays in sync with the JS debounce.
+ */
+@keyframes search-countdown-drain {
+  to {
+    stroke-dashoffset: 37.7; /* 2π·6 — the arc's full circumference */
+  }
+}
+@keyframes search-progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes search-progress-slide {
+  from {
+    left: -33%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.search-countdown-arc {
+  stroke-dasharray: 37.7;
+  stroke-dashoffset: 0;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  animation: search-countdown-drain linear forwards;
+}
+.search-progress-fill {
+  transform-origin: left;
+  animation: search-progress-fill linear forwards;
+}
+.search-progress-slide {
+  animation: search-progress-slide 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-countdown-arc,
+  .search-progress-fill,
+  .search-progress-slide {
+    animation: none;
+  }
+  .search-progress-slide {
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+}

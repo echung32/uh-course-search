@@ -413,6 +413,67 @@ test("course number filter narrows the results", async ({ page }) => {
   await expect(page.getByText(/of 6 sections/)).toBeVisible();
 });
 
+/** Records the given /api/search query param of every search request sent. */
+function recordSearchParam(page: Page, param: string): string[] {
+  const seen: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/search") seen.push(u.searchParams.get(param) ?? "");
+  });
+  return seen;
+}
+
+test("a filter change auto-searches without clicking Search", async ({ page }) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page).toHaveURL(/[?&]subject=ICS\b/);
+  expect(await totalSections(page)).toBe(6);
+});
+
+test("typing a course number auto-searches once complete and keeps focus", async ({
+  page,
+}) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+  const courseNumbers = recordSearchParam(page, "courseNumber");
+
+  const input = page.getByLabel("Course Number");
+  await input.pressSequentially("111", { delay: 50 });
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+  await expect(page).toHaveURL(/[?&]courseNumber=111\b/);
+  // The form isn't remounted by its own commit — the caret stays put.
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("111");
+  // Partial values ("1", "11") are exact-match dead ends and never hit the API.
+  expect(courseNumbers.filter((c) => c === "1" || c === "11")).toEqual([]);
+});
+
+test("a partial CRN doesn't auto-search; a complete one does", async ({ page }) => {
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  const crns = recordSearchParam(page, "crn");
+
+  const input = page.getByLabel("CRN");
+  await input.pressSequentially("1000", { delay: 50 });
+  await page.waitForTimeout(800); // well past the debounce
+  expect(crns.filter(Boolean)).toEqual([]);
+
+  await input.pressSequentially("1");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+  expect(crns.filter(Boolean)).toEqual(["10001"]);
+});
+
+test("Back restores the previous search into the form", async ({ page }) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page).toHaveURL(/[?&]subject=ICS\b/);
+  await page.getByLabel("Course Number").pressSequentially("111", { delay: 50 });
+  await expect(page).toHaveURL(/[?&]courseNumber=111\b/);
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+
+  await page.goBack();
+  await expect(page).not.toHaveURL(/courseNumber=/);
+  await expect(page.getByLabel("Course Number")).toHaveValue("");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+});
+
 test("attribute filter narrows to sections carrying the tag", async ({ page }) => {
   // WI is on ICS 111 sec 001 (10001) and ICS 311 sec 001 (10005) → 2 sections.
   await page.goto("/?term=202710&subject=ICS&attribute=WI");
