@@ -789,6 +789,7 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       SIS_BASE_URL: "http://127.0.0.1:9999/StudentRegistrationSsb",
       CRSEAVAIL: "1",
       CRSEAVAIL_BASE_URL: `${MOCK_ORIGIN}/crseavail/api`,
+      CRSEAVAIL_DELAY_MS: "0",
       REFRESH_ROLLING_RESTRICTION_CRNS: "1",
       REFRESH_ROLLING_EXTRAS_CRNS: "1",
       REFRESH_ROLLING_PREREQ_COURSES: "1",

@@ -27,6 +27,18 @@ export function crseavailEnabled(): boolean {
   return process.env.CRSEAVAIL === "1";
 }
 
+const DEFAULT_DELAY_MS = 250;
+
+/**
+ * Pause between crseavail units (ms), from CRSEAVAIL_DELAY_MS (integer >= 0;
+ * anything else = 250). Read at call time so tests and ops can change it.
+ */
+export function crseavailDelayMs(): number {
+  const raw = process.env.CRSEAVAIL_DELAY_MS;
+  const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_DELAY_MS;
+}
+
 export class CrseavailError extends Error {
   reason: "http" | "not-json" | "shape" | "network";
   status?: number;

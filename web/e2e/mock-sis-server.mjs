@@ -215,10 +215,12 @@ const activeCatalog = () => (catalogPhase === 1 ? CATALOG : CATALOG_PHASE2);
 // Mirrors the real API: every call needs an X-Recaptcha-Token header (400 JSON
 // without it), a missing/bad parameter yields `200 []`, and course-level
 // endpoints return one row per SECTION keyed by ssbsectCrn1. A global mode
-// (POST /__mock/crseavail?mode=) makes it misbehave; tests reset it to "ok".
+// (POST /__mock/crseavail?mode=[&subject=]) makes it misbehave — for every
+// call, or with `subject` only for that subject's unit calls; tests reset it to "ok".
 const CRSEAVAIL_BASE = "/crseavail/api";
 const CA_MODES = ["ok", "empty", "html", "http500", "shape", "short"];
 let crseavailMode = "ok";
+let crseavailModeSubject = null;
 
 const CA_COLLEGE = { ICS: "14", MATH: "20" };
 
@@ -285,7 +287,8 @@ function handleCrseavail(req, res, url) {
   const endpoint = url.pathname.slice(CRSEAVAIL_BASE.length + 1);
   const rows = caRows(endpoint, url.searchParams);
   if (rows === null) return sendJson(res, 404, { status: 404, error: "Not Found" });
-  switch (crseavailMode) {
+  const scoped = crseavailModeSubject !== null && url.searchParams.get("subjectCode") !== crseavailModeSubject;
+  switch (scoped ? "ok" : crseavailMode) {
     case "empty":
       return sendJson(res, 200, []);
     case "html":
@@ -344,12 +347,22 @@ function readBody(req) {
 // answer 500 for that CRN; rules accumulate until /__mock/reset.
 const failRules = new Set();
 
+// Per-route request counters (Banner paths without the /StudentRegistrationSsb
+// prefix, crseavail paths in full), read via GET /__mock/counts and zeroed by
+// /__mock/reset — the request-count tests assert exact numbers.
+const counts = new Map();
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname.startsWith(BASE) ? url.pathname.slice(BASE.length) : url.pathname;
 
   // Health check used by Playwright's webServer readiness probe.
   if (path === "/health") return sendJson(res, 200, { ok: true });
+
+  if (req.method === "GET" && path === "/__mock/counts") {
+    return sendJson(res, 200, { counts: Object.fromEntries(counts) });
+  }
+  if (!path.startsWith("/__mock/")) counts.set(path, (counts.get(path) ?? 0) + 1);
 
   // Control endpoint: advance to catalog phase 2.
   if (req.method === "POST" && path === "/__mock/advance") {
@@ -361,7 +374,9 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && path === "/__mock/reset") {
     catalogPhase = 1;
     crseavailMode = "ok";
+    crseavailModeSubject = null;
     failRules.clear();
+    counts.clear();
     return sendJson(res, 200, { ok: true, phase: catalogPhase, crseavail: crseavailMode });
   }
 
@@ -387,7 +402,8 @@ const server = createServer(async (req, res) => {
     const mode = url.searchParams.get("mode") ?? "ok";
     if (!CA_MODES.includes(mode)) return sendJson(res, 400, { error: `unknown mode: ${mode}` });
     crseavailMode = mode;
-    return sendJson(res, 200, { ok: true, crseavail: crseavailMode });
+    crseavailModeSubject = url.searchParams.get("subject");
+    return sendJson(res, 200, { ok: true, crseavail: crseavailMode, subject: crseavailModeSubject });
   }
 
   // Class Availability API (crseavail).

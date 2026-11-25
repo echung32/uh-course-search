@@ -6,7 +6,17 @@ import { freshSearchDb, type FreshSearchDb } from "./sqlite-fixture";
 
 const MOCK = process.env.E2E_MOCK_ORIGIN ?? "http://127.0.0.1:9999"; // the Playwright-started mock
 const TERM = "202730";
-const ENV_KEYS = ["SIS_BASE_URL", "CRSEAVAIL", "CRSEAVAIL_BASE_URL"] as const;
+const ENV_KEYS = [
+  "SIS_BASE_URL",
+  "CRSEAVAIL",
+  "CRSEAVAIL_BASE_URL",
+  "CRSEAVAIL_DELAY_MS",
+  "REFRESH_ROLLING_RESTRICTION_CRNS",
+  "REFRESH_ROLLING_DETAIL_CRNS",
+  "REFRESH_ROLLING_EXTRAS_CRNS",
+  "REFRESH_ROLLING_PREREQ_COURSES",
+  "REFRESH_ROLLING_FACTS_COURSES",
+] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 type CF = typeof import("../src/lib/ingest/courseFacts");
@@ -19,13 +29,23 @@ async function mockPost(path: string): Promise<void> {
   const res = await fetch(`${MOCK}${path}`, { method: "POST" });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
 }
-const setMode = (mode: string) => mockPost(`/__mock/crseavail?mode=${mode}`);
+const setMode = (mode: string, subject?: string) =>
+  mockPost(`/__mock/crseavail?mode=${mode}${subject ? `&subject=${subject}` : ""}`);
+/** Mock request counts per route since the last /__mock/reset (0 when absent). */
+async function mockCounts(paths: string[]): Promise<Record<string, number>> {
+  const res = await fetch(`${MOCK}/__mock/counts`);
+  if (!res.ok) throw new Error(`/__mock/counts: ${res.status}`);
+  const { counts } = (await res.json()) as { counts: Record<string, number> };
+  return Object.fromEntries(paths.map((p) => [p, counts[p] ?? 0]));
+}
 
 test.beforeAll(async () => {
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   process.env.SIS_BASE_URL = `${MOCK}/StudentRegistrationSsb`;
   process.env.CRSEAVAIL = "1";
   process.env.CRSEAVAIL_BASE_URL = `${MOCK}/crseavail/api`;
+  process.env.CRSEAVAIL_DELAY_MS = "0";
+  for (const k of ENV_KEYS) if (k.startsWith("REFRESH_ROLLING_")) delete process.env[k];
   cf = await import("../src/lib/ingest/courseFacts");
   crossList = await import("../src/lib/ingest/crossList");
   ({ syncTerm } = await import("../src/lib/ingest/sync"));
@@ -276,7 +296,7 @@ test("parity passes when crseavail matches stored Banner values", async () => {
   const d = await syncDetails(f.db, TERM, { courseDelayMs: 0 });
   expect(d.status).not.toBe("error");
   const r = await crseavailParity(f.db, TERM);
-  expect(r.unitsFailed).toBe(0);
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 2, unitsFailed: 0, unitsUnmapped: 0 });
   expect(r.pass).toBe(true);
   for (const field of Object.values(r.fields)) {
     if (field.compared > 0) expect(field.rate).toBe(1);
@@ -328,8 +348,163 @@ test("parity fails when crseavail is down: every unit failed and cross-list fail
   ).n;
   const r = await crseavailParity(f.db, TERM);
   expect(units).toBeGreaterThan(0);
-  expect(r.unitsFailed).toBe(units);
+  expect(r.coverage).toEqual({ units, unitsOk: 0, unitsFailed: units, unitsUnmapped: 0 });
   expect(r.crossListFailed).toBe(true);
   expect(r.fields.crossList.compared).toBe(0);
   expect(r.pass).toBe(false);
+});
+
+test("parity fails when too many units fail, even though the rest match", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  await setMode("html", "MATH"); // only the MATH unit's crseavail calls fail
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 1, unitsFailed: 1, unitsUnmapped: 0 });
+  expect(r.crossListFailed).toBe(false);
+  for (const field of Object.values(r.fields)) {
+    if (field.compared > 0) expect(field.rate).toBe(1);
+  }
+  expect(r.fields.description.compared).toBeGreaterThan(0);
+  expect(r.pass).toBe(false); // 1/2 units failed > 5%
+});
+
+test("parity counts units with no campus code separately from failures", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  f.raw
+    .prepare(`UPDATE course_section SET raw_json = json_set(raw_json, '$.meetingsFaculty', json('[]')) WHERE term = ?`)
+    .run(TERM);
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 0, unitsFailed: 0, unitsUnmapped: 2 });
+  expect(r.pass).toBe(false); // nothing compared from crseavail units
+});
+
+test("crseavail units are spaced by CRSEAVAIL_DELAY_MS (facts and parity)", async () => {
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  const DELAY = 600;
+  process.env.CRSEAVAIL_DELAY_MS = String(DELAY);
+  try {
+    let t = Date.now();
+    const r = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0 });
+    expect(r.units).toBe(2); // one pause between the two units
+    expect(Date.now() - t).toBeGreaterThanOrEqual(DELAY);
+    t = Date.now();
+    const p = await crseavailParity(f.db, TERM);
+    expect(p.coverage.unitsOk).toBe(2);
+    expect(Date.now() - t).toBeGreaterThanOrEqual(DELAY);
+  } finally {
+    process.env.CRSEAVAIL_DELAY_MS = "0";
+  }
+});
+
+test("fallback reasons reach the run log (not only the [CA] tag)", async () => {
+  await setMode("html");
+  const lines: string[] = [];
+  const log = (m: string) => lines.push(m);
+  await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0, log });
+  expect(lines.some((l) => /MAN ICS: rejected \(not-json\) → Banner/.test(l))).toBe(true);
+  expect(lines.some((l) => /breaker tripped after .*MAN ICS \(not-json\)/.test(l))).toBe(true);
+  lines.length = 0;
+  await crossList.syncCrossList(f.db, TERM, { fallbackCrns: [], delayMs: 0, log });
+  expect(lines.some((l) => /cross-list: crseavail rejected \(not-json\) → Banner/.test(l))).toBe(true);
+});
+
+// ── Request counts (spec: crseavail replaces the per-course Banner calls) ──
+const CA = (e: string) => `/crseavail/api/${e}`;
+const SSB = (e: string) => `/ssb/searchResults/${e}`;
+const COUNTED = [
+  CA("courses"),
+  CA("course-desc"),
+  CA("course-grading"),
+  CA("crosslist"),
+  SSB("getSectionCatalogDetails"),
+  SSB("getCourseDescription"),
+  SSB("getXlstSections"),
+  SSB("getRestrictions"),
+  SSB("getFees"),
+  SSB("getLinkedSections"),
+  SSB("getSyllabus"),
+  SSB("getSectionPrerequisites"),
+  SSB("getCorequisites"),
+];
+
+/** College/department names already known from another term, so no Banner name lookup is needed. */
+function seedCatalogNames() {
+  const ins = f.raw.prepare(
+    `INSERT INTO course (term, campus_description, subject, course_number, college_code, college_name,
+                         department, department_code, synced_at)
+     VALUES ('202610', 'Manoa', ?, '100', ?, ?, ?, ?, 1)`
+  );
+  ins.run("ICS", "14", "College of Natural Sciences", "Information & Computer Sciences", "ICS");
+  ins.run("MATH", "20", "College of Natural Sciences", "Mathematics", "MATH");
+}
+
+test("capture with crseavail: units×3 + 1 crseavail calls, no per-course Banner facts or cross-list calls", async () => {
+  const { captureTerm } = await import("../src/lib/ingest/capture");
+  seedCatalogNames();
+  await mockPost("/__mock/reset"); // zero the counters after the beforeEach sync
+  const c = await captureTerm(f.db, TERM, { deadline: Date.now() + 60_000, delayMs: 0 });
+  expect(c).toMatchObject({ status: "ok", gapsAfter: 0, crseavail: "crseavail" });
+  // 2 units (Manoa ICS, Manoa MATH), 9 sections, 7 courses.
+  expect(await mockCounts(COUNTED)).toEqual({
+    [CA("courses")]: 2,
+    [CA("course-desc")]: 2,
+    [CA("course-grading")]: 2,
+    [CA("crosslist")]: 1,
+    [SSB("getSectionCatalogDetails")]: 0,
+    [SSB("getCourseDescription")]: 0,
+    [SSB("getXlstSections")]: 0,
+    [SSB("getRestrictions")]: 9,
+    [SSB("getFees")]: 9,
+    [SSB("getLinkedSections")]: 9,
+    [SSB("getSyllabus")]: 9,
+    [SSB("getSectionPrerequisites")]: 7,
+    [SSB("getCorequisites")]: 7,
+  });
+});
+
+test("daily details refresh keeps Banner per-CRN/per-course calls within the caps", async () => {
+  const { refreshTermDetails } = await import("../src/lib/ingest/refresh");
+  process.env.REFRESH_ROLLING_RESTRICTION_CRNS = "2";
+  process.env.REFRESH_ROLLING_EXTRAS_CRNS = "3";
+  process.env.REFRESH_ROLLING_PREREQ_COURSES = "1";
+  process.env.REFRESH_ROLLING_FACTS_COURSES = "2";
+  try {
+    // crseavail down (HTML challenge): the worst case, everything on Banner.
+    await mockPost("/__mock/reset");
+    await setMode("html");
+    const d = await refreshTermDetails(
+      f.db,
+      TERM,
+      { newCrns: ["10001"], droppedCrns: [], structuralCrns: [] },
+      { courseDelayMs: 0 }
+    );
+    expect(d.status).toBe("ok");
+    expect(d.facts.source).toBe("degraded");
+    expect(d.crossList).toBe("banner");
+    // B1 = 10001 (ICS 111). Facts: the B1 course + 2 stalest. Restrictions:
+    // B1 + 2. Extras: B1 + 3. Cross-list: B1 ∪ the 3 rolling extras. Prereqs:
+    // the B1 course (the 1-course stale cursor also picks ICS 111, already wanted).
+    expect(await mockCounts(COUNTED)).toEqual({
+      [CA("courses")]: 1, // the preflight unit, rejected → breaker
+      [CA("course-desc")]: 0,
+      [CA("course-grading")]: 0,
+      [CA("crosslist")]: 1,
+      [SSB("getSectionCatalogDetails")]: 3,
+      [SSB("getCourseDescription")]: 3,
+      [SSB("getXlstSections")]: 4,
+      [SSB("getRestrictions")]: 3,
+      [SSB("getFees")]: 4,
+      [SSB("getLinkedSections")]: 4,
+      [SSB("getSyllabus")]: 4,
+      [SSB("getSectionPrerequisites")]: 1,
+      [SSB("getCorequisites")]: 1,
+    });
+  } finally {
+    for (const k of ENV_KEYS) if (k.startsWith("REFRESH_ROLLING_")) delete process.env[k];
+  }
 });

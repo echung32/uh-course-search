@@ -130,6 +130,26 @@ test("crseavailEnabled reflects CRSEAVAIL", async () => {
   }
 });
 
+test("crseavailDelayMs reads CRSEAVAIL_DELAY_MS at call time (integer >= 0, default 250)", async () => {
+  const { crseavailDelayMs } = await import("../src/lib/crseavail/client");
+  const prev = process.env.CRSEAVAIL_DELAY_MS;
+  try {
+    delete process.env.CRSEAVAIL_DELAY_MS;
+    expect(crseavailDelayMs()).toBe(250);
+    process.env.CRSEAVAIL_DELAY_MS = "0";
+    expect(crseavailDelayMs()).toBe(0);
+    process.env.CRSEAVAIL_DELAY_MS = "40";
+    expect(crseavailDelayMs()).toBe(40);
+    for (const bad of ["", "-1", "1.5", "abc"]) {
+      process.env.CRSEAVAIL_DELAY_MS = bad;
+      expect(crseavailDelayMs()).toBe(250);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.CRSEAVAIL_DELAY_MS;
+    else process.env.CRSEAVAIL_DELAY_MS = prev;
+  }
+});
+
 test.describe("crseavail map", () => {
   test("buildCourseFacts maps ICS 311 like Banner", async () => {
     const { buildCourseFacts } = await import("../src/lib/crseavail/map");

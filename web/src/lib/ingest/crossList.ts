@@ -63,7 +63,8 @@ export async function syncCrossList(
       if (!(err instanceof CrseavailError)) throw err;
       reason = err.reason;
     }
-    logCa(`${term} crosslist: rejected (${reason}) → Banner for ${opts.fallbackCrns.length} CRNs`);
+    // A fallback: the run's log (ungated), not the [CA] chatter tag.
+    log(`[${term}] cross-list: crseavail rejected (${reason}) → Banner for ${opts.fallbackCrns.length} CRNs`);
   }
 
   const b = await bannerCrossList(db, term, opts.fallbackCrns, opts);

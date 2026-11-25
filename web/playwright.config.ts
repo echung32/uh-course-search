@@ -98,6 +98,7 @@ export default defineConfig({
       //   EDGE_CACHE=0      → the ingestion specs mutate D1 mid-run; reads must
       //                       observe fresh data, not a cached response.
       //   CRSEAVAIL=1       → ingestion uses the mock's /crseavail/api routes.
+      //   CRSEAVAIL_DELAY_MS=0 → no pause between crseavail units in tests.
       command:
         `yarn build && yarn wrangler dev --ip 127.0.0.1 --port ${APP_PORT}` +
         ` --persist-to ${E2E_PERSIST}` +
@@ -106,6 +107,7 @@ export default defineConfig({
         ` --var INGEST_ON_WORKER:1 --var ADMIN_SECRET:${ADMIN_SECRET}` +
         ` --var EDGE_CACHE:0` +
         ` --var CRSEAVAIL:1 --var CRSEAVAIL_BASE_URL:http://127.0.0.1:${MOCK_SIS_PORT}/crseavail/api` +
+        ` --var CRSEAVAIL_DELAY_MS:0` +
         (NATIVE_D1
           ? ""
           : ` --var DB_GATEWAY_URL:http://127.0.0.1:${GATEWAY_PORT}` +

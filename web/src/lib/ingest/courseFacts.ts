@@ -12,6 +12,10 @@
  *
  * crseavail never nulls anything here (upsertCourseFacts COALESCEs); the one
  * exception is the guarded term-wide cross-list write in syncCrossList (crossList.ts).
+ *
+ * Units are fetched one at a time, CRSEAVAIL_DELAY_MS apart (default 250). Every
+ * fallback (rejected unit, breaker trip, courses absent from a response) goes to
+ * the run's `log`, ungated; `[CA]` (logCa) carries only the per-call chatter.
  */
 import {
   establishSession,
@@ -31,6 +35,7 @@ import {
   caCourseDesc,
   caCourseGrading,
   caCourses,
+  crseavailDelayMs,
   crseavailEnabled,
   CrseavailError,
 } from "@/lib/crseavail/client";
@@ -382,6 +387,8 @@ export async function syncCourseFacts(
       return names.get(k)!;
     };
     let breaker: BreakerState = { attempted: 0, consecutive: 0, tripped: false };
+    const delay = crseavailDelayMs();
+    let fetched = 0; // units that called crseavail so far (the delay goes between them)
 
     for (const u of units) {
       if (pastDeadline(opts.deadline)) {
@@ -389,9 +396,9 @@ export async function syncCourseFacts(
         break;
       }
       const code = codes.get(u.campus);
-      const unitName = `${term} ${code ?? JSON.stringify(u.campus)} ${u.subject}`;
+      const unitName = `${code ?? JSON.stringify(u.campus)} ${u.subject}`;
       const reject = (reason: Rejection) => {
-        logCa(`${unitName}: rejected (${reason}) → Banner`);
+        log(`[${term}] course facts ${unitName}: rejected (${reason}) → Banner`);
         count(reason);
         result.unitsFallback += 1;
         toPool(u.courses);
@@ -407,14 +414,15 @@ export async function syncCourseFacts(
         reject("no-campus-code");
         continue;
       }
+      if (fetched++ > 0 && delay > 0) await sleep(delay);
       const ca = { term, campusCode: code, subject: u.subject };
-      const r = await fetchAndApplyUnit(db, u, ca, unitName, index, namesFor, result);
+      const r = await fetchAndApplyUnit(db, u, ca, unitName, index, namesFor, result, log);
       if (typeof r === "string") reject(r);
       else toPool(r); // courses absent from an accepted response
       breaker = breakerStep(breaker, typeof r === "string" ? "rejected" : "accepted");
       if (breaker.tripped) {
         result.breakerTripped = true;
-        logCa(`${term}: breaker tripped after ${unitName} (${r}); Banner-only for the rest of the run`);
+        log(`[${term}] course facts: breaker tripped after ${unitName} (${r}); Banner-only for the rest of the run`);
       }
     }
     // Tripped, or every unit fell back (e.g. all unmapped): crseavail delivered nothing.
@@ -460,15 +468,16 @@ async function fetchAndApplyUnit(
   unitName: string,
   index: CrnIndex,
   namesFor: (campus: string, coll: string | null, dept: string | null, crn: string) => Promise<{ collegeName: string | null; department: string | null }>,
-  result: CourseFactsResult
+  result: CourseFactsResult,
+  log: (m: string) => void
 ): Promise<Rejection | TermCourse[]> {
   const call = async <T>(name: string, fn: (x: CaUnit) => Promise<T[]>): Promise<T[]> => {
     try {
       const rows = await fn(ca);
-      logCa(`${unitName} ${name}: ${rows.length} rows`);
+      logCa(`${ca.term} ${unitName} ${name}: ${rows.length} rows`);
       return rows;
     } catch (err) {
-      logCa(`${unitName} ${name}: failed (${err instanceof CrseavailError ? err.reason : "error"})`);
+      logCa(`${ca.term} ${unitName} ${name}: failed (${err instanceof CrseavailError ? err.reason : "error"})`);
       throw err;
     }
   };
@@ -521,7 +530,9 @@ async function fetchAndApplyUnit(
       await upsertCourseFacts(db, tc.key, facts, "crseavail", Date.now());
       result.written += 1;
     }
-    if (missing.length > 0) logCa(`${unitName}: ${missing.length} course(s) absent from crseavail → Banner`);
+    if (missing.length > 0) {
+      log(`[${ca.term}] course facts ${unitName}: ${missing.length} course(s) absent from crseavail → Banner`);
+    }
     return missing;
   } catch (err) {
     if (err instanceof CrseavailError) return err.reason;
