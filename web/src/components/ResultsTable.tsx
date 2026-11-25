@@ -33,7 +33,7 @@ import {
 import { SectionDetails } from "./SectionDetails";
 import { CoverageDialog, type CoverageParams } from "./CoverageDialog";
 import { abbreviateCampus } from "@/lib/campuses";
-import { ScheduleCell } from "@/components/ScheduleCell";
+import { SCHEDULE_COLUMNS, ScheduleCells } from "@/components/ScheduleCell";
 import { cn } from "@/lib/utils";
 import { sectionStatus, STATUS_RAIL, STATUS_LABEL } from "@/lib/sectionStatus";
 import {
@@ -46,7 +46,8 @@ import type { CourseSection, DateRange, MeetingTime, SearchResultsResponse } fro
 
 // Total columns including the leading expand toggle and the (optional) Campus
 // column — kept in sync with the header / skeleton / empty-state colSpans below.
-const COLUMN_COUNT = 12;
+// Schedule is one header over SCHEDULE_COLUMNS sub-columns (Days | Time | Room | Dates).
+const COLUMN_COUNT = 11 + SCHEDULE_COLUMNS;
 
 function columnCount(showCampus: boolean): number {
   return showCampus ? COLUMN_COUNT : COLUMN_COUNT - 1;
@@ -151,9 +152,7 @@ function SectionRow({
           <span className="text-muted-foreground text-sm">TBA</span>
         )}
       </TableCell>
-      <TableCell>
-        <ScheduleCell meetings={meetings} usualDateRange={usualDateRange} />
-      </TableCell>
+      <ScheduleCells meetings={meetings} usualDateRange={usualDateRange} />
       <TableCell className="text-center text-sm">
         <span className={section.seatsAvailable > 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}>
           {section.enrollment}/{section.maximumEnrollment}
@@ -354,7 +353,7 @@ export function ResultsTable({
               <TableHead>Title</TableHead>
               <TableHead className="w-16 text-center">Cr</TableHead>
               <TableHead>Instructor</TableHead>
-              <TableHead>Schedule</TableHead>
+              <TableHead colSpan={SCHEDULE_COLUMNS}>Schedule</TableHead>
               <TableHead className="w-20 text-center">Enrolled</TableHead>
               <TableHead className="w-20 text-center">Waitlist</TableHead>
               <TableHead>Attributes</TableHead>

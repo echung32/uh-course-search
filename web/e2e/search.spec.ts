@@ -719,19 +719,29 @@ test("schedule column keeps each meeting's time and room together", async ({ pag
   await expect(page.getByRole("columnheader", { name: "Days/Times" })).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "Location" })).toHaveCount(0);
 
-  // ICS 311 sec 001 (CRN 10005): one line per meeting; the no-set-time online
-  // meeting goes last.
-  const cell = page.getByRole("row").filter({ hasText: "10005" }).getByTestId("schedule-cell");
-  const lines = cell.getByTestId("meeting-line");
-  await expect(lines).toHaveCount(3);
-  await expect(lines.nth(0)).toHaveText("MWF 10:30–11:20 AM POST 318A");
-  // Only the off-range one-day meeting carries dates — on its own line.
-  await expect(lines.nth(1)).toHaveText("T 6:00–7:50 PM KELLER 101 Sep 2 only");
-  await expect(lines.nth(2)).toHaveText("— ONLINE ASYNC");
-  await expect(cell).not.toContainText("Aug 25");
+  // ICS 311 sec 001 (CRN 10005): Days | Time | Room | Dates are real table
+  // columns, one line per meeting; the no-set-time online meeting goes last.
+  const row = page.getByRole("row").filter({ hasText: "10005" });
+  const parts = (col: string) => row.getByTestId(`schedule-${col}`).getByTestId("meeting-part");
+  await expect(parts("days")).toHaveText(["MWF", "T", ""]);
+  await expect(parts("time")).toHaveText(["10:30–11:20 AM", "6:00–7:50 PM", "—"]);
+  await expect(parts("room")).toHaveText(["POST 318A", "KELLER 101", "ONLINE ASYNC"]);
+  // Only the off-range one-day meeting carries dates.
+  await expect(parts("dates")).toHaveText(["", "Sep 2 only", ""]);
 
-  // ICS 211 (CRN 10004) meets on the usual dates → no date line at all.
-  const plain = page.getByRole("row").filter({ hasText: "10004" }).getByTestId("schedule-cell");
-  await expect(plain).toContainText("9:00–9:50 AM");
-  await expect(plain).not.toContainText(/[A-Z][a-z]{2} \d+ (–|only)/);
+  // A meeting's parts share a baseline across the four columns…
+  for (let i = 0; i < 3; i++) {
+    const ys = await Promise.all(
+      ["days", "time", "room", "dates"].map(async (c) => (await parts(c).nth(i).boundingBox())!.y)
+    );
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1);
+  }
+  // …and every row's times start at the same x (shared table column).
+  const xOf = async (crn: string) =>
+    (await page.getByRole("row").filter({ hasText: crn }).getByTestId("schedule-time").boundingBox())!.x;
+  expect(await xOf("10004")).toBe(await xOf("10005"));
+
+  // ICS 211 (CRN 10004) meets on the usual dates → no date text at all.
+  await expect(page.getByRole("row").filter({ hasText: "10004" }).getByTestId("schedule-dates")).toHaveText("");
 });
+
