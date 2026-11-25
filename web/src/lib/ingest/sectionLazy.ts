@@ -1,10 +1,9 @@
 /**
  * Lazy (cache-on-miss) section-detail fetch. Ingest fills `section_detail` in
- * per-fragment groups (restrictions; extras = fees + linked + syllabus), each
+ * per-fragment groups (restrictions; extras = fees + linked + syllabus; cross-list), each
  * with its own freshness stamp. On view, only the groups still missing are
  * fetched live, written with the per-fragment writers (never touching a group
- * that wasn't requested), and the merged row is read back. Cross-list is never
- * fetched on view — it comes from ingest.
+ * that wasn't requested), and the merged row is read back.
  *
  * Failure semantics: if every requested group fails, nothing is written and the
  * result is null (the caller serves a stored partial row, or 404s). Extras are
@@ -13,6 +12,7 @@
  */
 import {
   establishSession,
+  getCrossListSections,
   getFees,
   getLinkedSections,
   getRestrictions,
@@ -26,13 +26,18 @@ import {
 } from "@/lib/sis/parse/sectionDetail";
 import type { D1Like } from "@/lib/db/types";
 import { getSectionDetail, type SectionDetail } from "@/lib/db/queries";
-import { upsertSectionExtras, upsertSectionRestrictions } from "@/lib/db/upsert";
+import {
+  upsertSectionCrossLists,
+  upsertSectionExtras,
+  upsertSectionRestrictions,
+} from "@/lib/db/upsert";
 import { tryTakeLazySlot } from "@/lib/ingest/lazyLimit";
 import { logSis } from "@/lib/log";
 
 export interface MissingFragments {
   restrictions: boolean;
   extras: boolean;
+  crossList: boolean;
 }
 
 /** Concurrent first-views of the same section share one live fetch. */
@@ -61,6 +66,7 @@ async function fetchAndStore(
     `section detail ${term}:${crn} — live fetch (${[
       missing.restrictions && "restrictions",
       missing.extras && "extras",
+      missing.crossList && "cross-list",
     ]
       .filter(Boolean)
       .join("+")})`
@@ -113,6 +119,22 @@ async function fetchAndStore(
       )
     );
   }
+  if (missing.crossList) {
+    groups.push(
+      getCrossListSections(session, term, crn).then(
+        async (html) => {
+          await upsertSectionCrossLists(
+            db,
+            term,
+            [{ crn, crossListCrns: parseSectionCrns(html), rawXlstHtml: html }],
+            Date.now()
+          );
+          return true;
+        },
+        () => false
+      )
+    );
+  }
   const ok = await Promise.all(groups);
   if (!ok.some(Boolean)) {
     console.warn(
@@ -135,9 +157,9 @@ export async function ensureSectionDetail(
   missing: MissingFragments
 ): Promise<SectionDetail | null> {
   if (!lazyEnabled()) return null;
-  if (!missing.restrictions && !missing.extras) return null;
+  if (!missing.restrictions && !missing.extras && !missing.crossList) return null;
 
-  const key = `${term}:${crn}:${missing.restrictions ? "r" : ""}${missing.extras ? "e" : ""}`;
+  const key = `${term}:${crn}:${missing.restrictions ? "r" : ""}${missing.extras ? "e" : ""}${missing.crossList ? "x" : ""}`;
   const existing = inFlight.get(key);
   if (existing) return existing;
 

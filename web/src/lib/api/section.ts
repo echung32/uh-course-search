@@ -13,8 +13,9 @@ export async function runSectionDetail(
   const missing = {
     restrictions: state?.restrictionsSyncedAt == null,
     extras: state?.extrasSyncedAt == null,
+    crossList: state?.crosslistSyncedAt == null,
   };
-  if (state && !missing.restrictions && !missing.extras) {
+  if (state && !missing.restrictions && !missing.extras && !missing.crossList) {
     logDb(`section detail ${term}:${crn} (cached)`);
     return state.detail;
   }

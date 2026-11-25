@@ -364,27 +364,30 @@ export interface SectionDetail {
   syllabus: string | null;
 }
 
-/** Section-level detail (restrictions/fees/cross-list/…); null if not ingested. */
-export async function getSectionDetail(
-  db: D1Like,
-  term: string,
-  crn: string
-): Promise<SectionDetail | null> {
-  const row = await db
+type SectionDetailRow = {
+  restrictions_json: string | null;
+  fees_json: string | null;
+  cross_list_crns: string | null;
+  linked_crns: string | null;
+  syllabus_text: string | null;
+  r: number | null;
+  e: number | null;
+  x: number | null;
+};
+
+/** One query: the detail columns plus the three per-fragment freshness stamps. */
+async function readSectionDetailRow(db: D1Like, term: string, crn: string) {
+  return db
     .prepare(
-      `SELECT restrictions_json, fees_json, cross_list_crns, linked_crns,
-              syllabus_text
+      `SELECT restrictions_json, fees_json, cross_list_crns, linked_crns, syllabus_text,
+              restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x
          FROM section_detail WHERE term = ? AND crn = ?`
     )
     .bind(term, crn)
-    .first<{
-      restrictions_json: string | null;
-      fees_json: string | null;
-      cross_list_crns: string | null;
-      linked_crns: string | null;
-      syllabus_text: string | null;
-    }>();
-  if (!row) return null;
+    .first<SectionDetailRow>();
+}
+
+function toSectionDetail(term: string, crn: string, row: SectionDetailRow): SectionDetail {
   const j = (s: string | null): unknown =>
     s == null ? null : (() => { try { return JSON.parse(s); } catch { return null; } })();
   return {
@@ -395,6 +398,37 @@ export async function getSectionDetail(
     crossListCrns: j(row.cross_list_crns) as string[] | null,
     linkedCrns: j(row.linked_crns) as string[] | null,
     syllabus: row.syllabus_text,
+  };
+}
+
+/** Section-level detail (restrictions/fees/cross-list/…); null if not ingested. */
+export async function getSectionDetail(
+  db: D1Like,
+  term: string,
+  crn: string
+): Promise<SectionDetail | null> {
+  const row = await readSectionDetailRow(db, term, crn);
+  return row ? toSectionDetail(term, crn, row) : null;
+}
+
+/** Section detail plus per-fragment-group freshness (null when no row exists). */
+export async function getSectionDetailState(
+  db: D1Like,
+  term: string,
+  crn: string
+): Promise<{
+  detail: SectionDetail;
+  restrictionsSyncedAt: number | null;
+  extrasSyncedAt: number | null;
+  crosslistSyncedAt: number | null;
+} | null> {
+  const row = await readSectionDetailRow(db, term, crn);
+  if (!row) return null;
+  return {
+    detail: toSectionDetail(term, crn, row),
+    restrictionsSyncedAt: row.r ?? null,
+    extrasSyncedAt: row.e ?? null,
+    crosslistSyncedAt: row.x ?? null,
   };
 }
 
@@ -1059,25 +1093,4 @@ function normalizeChunkSort(params: SearchParams): {
     sortDirection:
       (params.sortDirection ?? "asc").toLowerCase() === "desc" ? "desc" : "asc",
   };
-}
-
-/** Section detail plus per-fragment-group freshness (null when no row exists). */
-export async function getSectionDetailState(
-  db: D1Like,
-  term: string,
-  crn: string
-): Promise<{
-  detail: SectionDetail;
-  restrictionsSyncedAt: number | null;
-  extrasSyncedAt: number | null;
-} | null> {
-  const detail = await getSectionDetail(db, term, crn);
-  if (!detail) return null;
-  const st = await db
-    .prepare(
-      "SELECT restrictions_synced_at AS r, extras_synced_at AS e FROM section_detail WHERE term = ? AND crn = ?"
-    )
-    .bind(term, crn)
-    .first<{ r: number | null; e: number | null }>();
-  return { detail, restrictionsSyncedAt: st?.r ?? null, extrasSyncedAt: st?.e ?? null };
 }

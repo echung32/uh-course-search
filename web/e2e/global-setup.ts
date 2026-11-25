@@ -298,9 +298,11 @@ export default async function globalSetup() {
   // Seeded here (not for 10001) so the lazy-fetch test above — which needs
   // 10001's detail absent — is unaffected. `synced_at` marks it "fetched".
   db.prepare(
-    `INSERT INTO section_detail (term, crn, cross_list_crns, synced_at)
-     VALUES (?, ?, ?, ?)`
-  ).run("202710", "10005", JSON.stringify(["10004"]), now);
+    `INSERT INTO section_detail
+       (term, crn, cross_list_crns, restrictions_synced_at, extras_synced_at,
+        crosslist_synced_at, synced_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run("202710", "10005", JSON.stringify(["10004"]), now, now, now, now);
 
   // Instructor contact card for the faculty seeded on CRN 10001, so the details
   // panel's instructor card renders from D1 (read path; no lazy fetch here).
