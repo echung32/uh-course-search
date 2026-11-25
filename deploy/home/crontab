@@ -3,7 +3,8 @@
 
 # Daily refresh at 22:00 HST — matches the old Workflow cron (08:00 UTC): a run
 # takes ~90 min and must finish before Banner's ~02:00 HST maintenance window.
-0 22 * * * yarn ingest daily
+# run-daily.sh holds a flock, so it skips (exit 0) if a manual run is still going.
+0 22 * * * /app/deploy/home/run-daily.sh
 
 # Nightly backups (VACUUM INTO /data/backups), after the refresh. Local retention
 # is BACKUP_KEEP_DAYS (default 14) — lower it when an offsite backup (restic etc.)
