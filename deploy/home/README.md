@@ -134,7 +134,7 @@ machine with wrangler auth.
   docker compose up -d        # recreate gateway + cron on the new image
   ```
   Deploy the Worker only **after** migrating: Worker code that reads a new column 503s every search until the migration has run.
-- **One-time: `0015` usual date ranges (Schedule column).** After migrating to `0015` (which also repairs NULL `section_meeting.begin_date` rows from `raw_json`), fill `term.usual_start_date/usual_end_date` for every term, then deploy the Worker:
+- **One-time: `0016` usual date ranges (Schedule column).** After migrating to `0016` (which also repairs NULL `section_meeting.begin_date` rows from `raw_json`), fill `term.usual_start_date/usual_end_date` for every term, then deploy the Worker:
   ```bash
   docker compose run --rm cron yarn ingest usual-dates     # or --term 202710 for one term
   ```

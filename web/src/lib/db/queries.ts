@@ -104,7 +104,7 @@ export async function getTermSyncMeta(
       .bind(term)
       .first();
   } catch (err) {
-    // A store without migration 0015 (the frozen native-D1 rollback target):
+    // A store without migration 0016 (the frozen native-D1 rollback target):
     // serve without a usual range — every meeting shows its dates — rather than
     // failing every search/filters/coverage request on the missing column.
     if (!/no such column/i.test(String(err))) throw err;
@@ -640,20 +640,22 @@ export async function searchSections(
 ): Promise<SearchResultsResponse> {
   const { from, where, binds: filterBinds } = buildSectionFilter(params);
 
-  const count = await db
-    .prepare(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`)
-    .bind(...filterBinds)
-    .first<{ n: number }>();
-  const totalCount = count?.n ?? 0;
-
-  const { results } = await db
-    .prepare(
-      `SELECT cs.raw_json AS raw_json FROM ${from} WHERE ${where}`
-        + ` ORDER BY ${resolveSort(params.sortColumn, params.sortDirection, Boolean(params.subject))}`
-        + " LIMIT ? OFFSET ?"
-    )
-    .bind(...filterBinds, params.pageMaxSize, params.pageOffset)
-    .all<{ raw_json: string }>();
+  // COUNT + page go out as ONE batch: through the home gateway every statement
+  // is its own tunnel round-trip (~20 ms each, vs <1 ms of SQLite time), so
+  // batching halves this function's latency. As a bonus both read the same
+  // snapshot (the gateway runs a batch in one transaction).
+  const [countResult, pageResult] = await db.batch([
+    db.prepare(`SELECT COUNT(*) AS n FROM ${from} WHERE ${where}`).bind(...filterBinds),
+    db
+      .prepare(
+        `SELECT cs.raw_json AS raw_json FROM ${from} WHERE ${where}`
+          + ` ORDER BY ${resolveSort(params.sortColumn, params.sortDirection, Boolean(params.subject))}`
+          + " LIMIT ? OFFSET ?"
+      )
+      .bind(...filterBinds, params.pageMaxSize, params.pageOffset),
+  ]);
+  const totalCount = (countResult.results[0] as { n: number } | undefined)?.n ?? 0;
+  const results = pageResult.results as Array<{ raw_json: string }>;
 
   return {
     success: true,

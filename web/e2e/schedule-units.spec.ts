@@ -161,8 +161,8 @@ test("refreshTermUsualDates stores the majority range, or clears it", async () =
   }
 });
 
-test("migration 0015 refills NULL section_meeting.begin_date from raw_json", () => {
-  const { dir, db } = tempSearchDb("0015");
+test("migration 0016 refills NULL section_meeting.begin_date from raw_json", () => {
+  const { dir, db } = tempSearchDb("0016");
   try {
     const raw = JSON.stringify({
       meetingsFaculty: [
@@ -179,7 +179,7 @@ test("migration 0015 refills NULL section_meeting.begin_date from raw_json", () 
        VALUES ('202640', '98366', 1, NULL, '08/14/2026')`
     ).run();
 
-    applyMigrations(db, (name) => name >= "0015");
+    applyMigrations(db, (name) => name >= "0016");
 
     expect(db.prepare("SELECT begin_date FROM section_meeting").get())
       .toEqual({ begin_date: "07/07/2026" });
@@ -196,8 +196,8 @@ test("termCacheProfile re-keys when the usual date range changes", () => {
   expect(before?.version).not.toBe(after?.version);
 });
 
-test("getTermSyncMeta still works on a pre-0015 database (D1 rollback path)", async () => {
-  const { dir, db } = tempSearchDb("0015");
+test("getTermSyncMeta still works on a pre-0016 database (D1 rollback path)", async () => {
+  const { dir, db } = tempSearchDb("0016");
   try {
     db.prepare(
       "INSERT INTO term (code, description, is_view_only, last_synced_at) VALUES ('202710', 'Fall 2026', 0, 123)"

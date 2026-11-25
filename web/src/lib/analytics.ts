@@ -48,8 +48,7 @@ export function fetchFacetTrend(
 export function fetchFillRateLeaderboard(
   term: string,
   limit: number,
-  campus?: string,
-  sort: "fillRate" | "waitlist" = "fillRate"
+  campus?: string
 ): Promise<LeaderboardRow[]> {
   const clamped = Math.max(1, Math.min(100, Math.floor(limit) || 25));
   const MIN_SECTIONS = 1; // drop nothing by default; >1 would hide small courses
@@ -58,8 +57,7 @@ export function fetchFillRateLeaderboard(
     term,
     clamped,
     MIN_SECTIONS,
-    campus || undefined,
-    sort
+    campus || undefined
   );
 }
 

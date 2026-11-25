@@ -90,14 +90,17 @@ export interface LeaderboardRow {
  * with its fill rate summed across campuses. Restricted to courses with capped
  * sections (so the fill-rate denominator is real). `minSections` drops
  * single-section noise.
+ *
+ * There is deliberately no waitlist ranking: Banner's per-section wait_count
+ * double-counts students who join several sections' waitlists, so a summed
+ * waitlist overstates demand by an unknowable factor.
  */
 export async function getFillRateLeaderboard(
   db: D1Like,
   term: string,
   limit: number,
   minSections: number,
-  campus?: string,
-  sort: "fillRate" | "waitlist" = "fillRate"
+  campus?: string
 ): Promise<LeaderboardRow[]> {
   // course_term_stats is keyed per (term, course, campus), so a campus filter is
   // a plain WHERE — no schema change needed. Empty campus = summed across all.
@@ -105,21 +108,6 @@ export async function getFillRateLeaderboard(
   const binds: (string | number)[] = campus
     ? [term, campus, minSections, limit]
     : [term, minSections, limit];
-  // Whitelisted ORDER BY + HAVING (never interpolate user input). Both modes
-  // break ties on the other metric. The metric gate differs per mode:
-  //  - fillRate: require capped_sections>0 so the enrollment÷capacity ratio has
-  //    a real denominator (an all-uncapped course has no meaningful fill rate).
-  //  - waitlist: require total_wait>0 instead — capped_sections is irrelevant
-  //    here, and gating on it would drop exactly the high-demand uncapped
-  //    courses (maximum_enrollment=0) the waitlist view exists to surface.
-  // The fillRate column is divide-by-zero-guarded because waitlist mode may now
-  // include rows with SUM(total_cap)=0.
-  const orderBy =
-    sort === "waitlist"
-      ? "ORDER BY waitlist DESC, fillRate DESC"
-      : "ORDER BY fillRate DESC, waitlist DESC";
-  const metricGate =
-    sort === "waitlist" ? "SUM(total_wait) > 0" : "SUM(capped_sections) > 0";
   const { results } = await db
     .prepare(
       `SELECT MAX(subject)                         AS subject,
@@ -136,8 +124,8 @@ export async function getFillRateLeaderboard(
         WHERE term = ? ${campusFilter}
           AND subject_course IS NOT NULL AND subject_course != ''
         GROUP BY subject_course
-       HAVING ${metricGate} AND SUM(sections) >= ?
-        ${orderBy}
+       HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
+        ORDER BY fillRate DESC, enrollment DESC
         LIMIT ?`
     )
     .bind(...binds)

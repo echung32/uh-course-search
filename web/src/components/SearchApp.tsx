@@ -7,9 +7,15 @@ import {
   parseAsNativeArrayOf,
 } from "nuqs";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import { SearchForm, pickDefaultTerm, type SearchFormValues } from "./SearchForm";
+import {
+  SearchForm,
+  formValuesKey,
+  pickDefaultTerm,
+  type SearchFormValues,
+} from "./SearchForm";
 import { ResultsTable } from "./ResultsTable";
 import { SectionDialog } from "./SectionDialog";
+import { ErrorBoundary } from "./ErrorBoundary";
 import type { CoverageParams } from "./CoverageDialog";
 import {
   ALL_CAMPUSES,
@@ -118,6 +124,11 @@ function SearchAppInner({ terms }: SearchAppProps) {
   // (the all-subjects auto-search is slow and could otherwise land last). Only
   // the latest request is allowed to touch state.
   const requestSeq = useRef(0);
+  // The in-flight search fetch, aborted when a newer search supersedes it (the
+  // form auto-searches, so superseded requests are routine, not rare).
+  const inflight = useRef<AbortController | null>(null);
+  // The filter set SearchForm last committed (see the formEpoch effect below).
+  const ownCommitKey = useRef<string | null>(null);
 
   // Client-side cache of fetched result pages, keyed by the exact /api/search
   // query string (which encodes every filter + page). Makes Next/Prev instant
@@ -152,6 +163,10 @@ function SearchAppInner({ terms }: SearchAppProps) {
   async function runSearch(params: SearchQuery) {
     const seq = ++requestSeq.current;
     const stale = () => seq !== requestSeq.current;
+    inflight.current?.abort();
+    const controller = new AbortController();
+    inflight.current = controller;
+    const { signal } = controller;
     setIsLoading(true);
     setError(null);
     const startedAt = performance.now();
@@ -161,7 +176,7 @@ function SearchAppInner({ terms }: SearchAppProps) {
     if (params.crn) {
       const crnQuery = new URLSearchParams({ term: params.term, crn: params.crn });
       try {
-        const res = await fetch(`/api/search?${crnQuery.toString()}`);
+        const res = await fetch(`/api/search?${crnQuery.toString()}`, { signal });
         if (stale()) return;
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Unknown error" }));
@@ -210,7 +225,7 @@ function SearchAppInner({ terms }: SearchAppProps) {
     }
 
     try {
-      const res = await fetch(`/api/search?${qs}`);
+      const res = await fetch(`/api/search?${qs}`, { signal });
       if (stale()) return;
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
@@ -258,6 +273,7 @@ function SearchAppInner({ terms }: SearchAppProps) {
   // The form emits `attributes` but the URL key is `attribute` — map explicitly
   // so nuqs receives the right key.
   function handleSearch(params: SearchFormValues) {
+    ownCommitKey.current = formValuesKey(params);
     const { attributes, ...rest } = params;
     setQ({ ...rest, attribute: attributes, page: 1 });
   }
@@ -295,20 +311,23 @@ function SearchAppInner({ terms }: SearchAppProps) {
     crn: q.crn,
     attributes: q.attribute ?? [],
   };
-  // Remount the form whenever the committed filters change (a new search or a
-  // Back/Forward navigation) so its draft re-seeds from the URL. Paging changes
-  // only page/size, which aren't in the key, so it doesn't remount the form.
-  const formKey = [
-    q.term,
-    q.subject,
-    q.courseNumber,
-    q.campus,
-    q.college,
-    q.department,
-    q.openOnly,
-    q.crn,
-    (q.attribute ?? []).join(","),
-  ].join("|");
+  // The form keeps its own draft and commits on its own (auto-search), so it
+  // must NOT remount on its own commits — that would drop focus and the caret
+  // mid-typing. It re-seeds (remounts via `formEpoch`) only when the committed
+  // filters change from outside it: a Back/Forward navigation. `ownCommitKey`
+  // is the filter set the form just committed; it's consumed by the first
+  // filter change after it, so a later navigation back to that same set still
+  // re-seeds. Paging changes only page/size, which aren't in the key.
+  const formKey = formValuesKey(formValues);
+  const lastFormKey = useRef(formKey);
+  const [formEpoch, setFormEpoch] = useState(0);
+  useEffect(() => {
+    if (formKey === lastFormKey.current) return;
+    lastFormKey.current = formKey;
+    const own = ownCommitKey.current;
+    ownCommitKey.current = null;
+    if (formKey !== own) setFormEpoch((e) => e + 1);
+  }, [formKey]);
   const coverageParams: CoverageParams | null = q.term
     ? {
         term: q.term,
@@ -332,7 +351,7 @@ function SearchAppInner({ terms }: SearchAppProps) {
   return (
     <div className="space-y-6">
       <SearchForm
-        key={formKey}
+        key={formEpoch}
         terms={terms}
         initialValues={formValues}
         onSearch={handleSearch}
@@ -345,23 +364,39 @@ function SearchAppInner({ terms }: SearchAppProps) {
         </div>
       )}
 
-      <ResultsTable
-        results={results}
-        searchParams={coverageParams}
-        tookMs={tookMs}
-        isLoading={isLoading}
-        onPageChange={handlePageChange}
-        onPageSizeChange={handlePageSizeChange}
-        onSelectCrn={openDetail}
-        showCampus={!campusScoped}
-      />
+      {/* Boundaries keep a render error in the table or dialog from unmounting
+          the whole island (form included). Each resets when its data changes. */}
+      <ErrorBoundary
+        resetKey={results}
+        fallback={
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"
+          >
+            These results couldn't be displayed. Try a different search.
+          </div>
+        }
+      >
+        <ResultsTable
+          results={results}
+          searchParams={coverageParams}
+          tookMs={tookMs}
+          isLoading={isLoading}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          onSelectCrn={openDetail}
+          showCampus={!campusScoped}
+        />
+      </ErrorBoundary>
 
-      <SectionDialog
-        term={q.term}
-        crn={q.view || null}
-        onSelectCrn={openDetail}
-        onClose={closeDetail}
-      />
+      <ErrorBoundary resetKey={`${q.term}|${q.view}`} fallback={null}>
+        <SectionDialog
+          term={q.term}
+          crn={q.view || null}
+          onSelectCrn={openDetail}
+          onClose={closeDetail}
+        />
+      </ErrorBoundary>
     </div>
   );
 }

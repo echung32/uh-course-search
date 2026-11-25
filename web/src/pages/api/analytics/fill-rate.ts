@@ -1,8 +1,9 @@
 /**
- * GET /api/analytics/fill-rate?term=202710&limit=25&campus=...&sort=fillRate|waitlist
- * The "hardest to get into" courses for a term, ranked by fill rate (default) or
- * waitlist headcount. `campus` is optional — omitted/empty ranks across all
- * campuses.
+ * GET /api/analytics/fill-rate?term=202710&limit=25&campus=...
+ * The "hardest to get into" courses for a term, ranked by fill rate. `campus` is
+ * optional — omitted/empty ranks across all campuses. (A former `sort=waitlist`
+ * mode was removed — summed waitlists double-count students on several
+ * sections' lists; an old `sort` param is ignored.)
  */
 import type { APIRoute } from "astro";
 import { fetchFillRateLeaderboard, fetchRollupTerms } from "@/lib/analytics";
@@ -20,7 +21,6 @@ export const GET: APIRoute = async ({ request }) => {
   let term = url.searchParams.get("term") ?? "";
   const limit = Number(url.searchParams.get("limit") ?? "25");
   const campus = url.searchParams.get("campus") ?? "";
-  const sort = url.searchParams.get("sort") === "waitlist" ? "waitlist" : "fillRate";
 
   const produce = async (): Promise<Response> => {
     try {
@@ -34,8 +34,8 @@ export const GET: APIRoute = async ({ request }) => {
         }
         term = terms[0];
       }
-      const rows = await fetchFillRateLeaderboard(term, limit, campus, sort);
-      return new Response(JSON.stringify({ term, sort, rows }), {
+      const rows = await fetchFillRateLeaderboard(term, limit, campus);
+      return new Response(JSON.stringify({ term, rows }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

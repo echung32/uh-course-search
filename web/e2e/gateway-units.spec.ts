@@ -246,8 +246,8 @@ test("migrate-sqlite applies only unapplied migrations", () => {
     const names = (after.prepare("SELECT name FROM d1_migrations ORDER BY id").all() as Array<{ name: string }>).map(
       (r) => r.name
     );
-    expect(names.at(-1)).toBe("0015_term_usual_dates.sql");
-    expect(names).toHaveLength(15);
+    expect(names.at(-1)).toBe("0016_term_usual_dates.sql");
+    expect(names).toHaveLength(16);
     const cols = (after.prepare("PRAGMA table_info(course_prereq)").all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toContain("ast_json");
     expect(cols).not.toContain("raw_text");
@@ -386,6 +386,26 @@ test.describe("gateway request budget", () => {
     const check = openSqliteFile(f.files.search);
     expect((check.prepare("SELECT COUNT(*) AS n FROM section_faculty").get() as { n: number }).n).toBe(0);
     check.close();
+  });
+
+  test("searchSections reads COUNT + page in one gateway request", async () => {
+    const { insertSectionsAndChildren } = await import("../src/lib/db/upsert");
+    const { searchSections } = await import("../src/lib/db/queries");
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    await insertSectionsAndChildren(db, Array.from({ length: 50 }, (_, i) => realisticSection(i)) as never[], 1);
+    const before = f.calls();
+    const page = await searchSections(db, {
+      term: "202740",
+      subject: "",
+      campus: "MAN",
+      pageOffset: 25,
+      pageMaxSize: 10,
+    });
+    expect(f.calls() - before).toBe(1);
+    expect(page.totalCount).toBe(50);
+    expect(page.data.map((s) => s.courseReferenceNumber)).toEqual(
+      Array.from({ length: 10 }, (_, i) => String(50025 + i))
+    );
   });
 
   test("getPrereqSubgraph needs O(depth) gateway requests on a branching graph", async () => {

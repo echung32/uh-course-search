@@ -1,6 +1,7 @@
 ---
 import "../styles/globals.css";
 import { ThemeToggle } from "../components/ThemeToggle";
+import Logo from "../components/Logo.astro";
 
 interface Props {
   title?: string;
@@ -32,7 +33,7 @@ const { title = "UH Course Search" } = Astro.props;
     <header class="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
       <div class="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
         <div class="flex items-center gap-4">
-          <span class="text-lg font-semibold tracking-tight">UH Course Search</span>
+          <Logo />
           <nav class="flex items-center gap-1 text-sm">
             <a
               href="/"

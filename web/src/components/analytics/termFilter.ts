@@ -28,3 +28,18 @@ export function classifyTerm(description: string): TermClass {
   const special = /\b(Extension|Apprenticeship|Accelerated)\b/i.test(description);
   return { semester, special };
 }
+
+/**
+ * Default term for the "Term snapshot" group: the newest base term (Fall /
+ * Spring / Summer, not an Extension / Apprenticeship / Accelerated sub-term —
+ * those sort after their semester by code, e.g. 202733 > 202730, but cover a
+ * small slice of courses). Falls back to the newest term when every candidate
+ * is special; "" when there are none.
+ */
+export function defaultSnapshotTerm(
+  codes: string[],
+  label: (code: string) => string
+): string {
+  const desc = [...codes].sort().reverse();
+  return desc.find((c) => !classifyTerm(label(c)).special) ?? desc[0] ?? "";
+}

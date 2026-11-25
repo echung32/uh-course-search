@@ -1,5 +1,5 @@
 /**
- * The per-term "usual" meeting date range (see migrations/0015). The results
+ * The per-term "usual" meeting date range (see migrations/0016). The results
  * table hides a meeting's dates when they match it, so Fall/Spring rows stay
  * clean while summer sessions and off-range meetings show theirs.
  */

@@ -73,7 +73,7 @@ redesign should cover:
 
 ### Data
 
-- Migration `0015`: `term.usual_start_date`, `term.usual_end_date` (TEXT,
+- Migration `0016` (renumbered from 0015 — master took 0015): `term.usual_start_date`, `term.usual_end_date` (TEXT,
   Banner `MM/DD/YYYY`; both NULL = no usual range / not computed).
 - Same migration repairs `section_meeting.begin_date`: ~40% of rows are NULL
   (4,242 of 10,567 in Fall 2026) although `raw_json` has `startDate`. Fill from
