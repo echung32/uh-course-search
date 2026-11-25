@@ -2,7 +2,8 @@
 // Worker-side client. No browser, no app server: each test builds throwaway
 // SQLite files in a temp dir and talks to an in-process gateway over HTTP.
 import { test, expect } from "@playwright/test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -216,5 +217,44 @@ test("gatewayD1 rejects within timeout when the gateway is unreachable", async (
   } finally {
     stub.closeAllConnections();
     await new Promise<void>((r) => stub.close(() => r()));
+  }
+});
+
+test("migrate-sqlite applies only unapplied migrations", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uhcs-mig-"));
+  const file = join(dir, "search.sqlite");
+  try {
+    // A DB as wrangler leaves it after 0001..0012: schema applied + recorded.
+    const db = new DatabaseSync(file);
+    db.exec(`CREATE TABLE d1_migrations(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
+      applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)`);
+    const applied = readdirSync("migrations").filter((f) => f.endsWith(".sql")).sort().slice(0, 12);
+    for (const name of applied) {
+      db.exec(readFileSync(join("migrations", name), "utf8"));
+      db.prepare("INSERT INTO d1_migrations (name) VALUES (?)").run(name);
+    }
+    db.close();
+
+    const run = (...extra: string[]) =>
+      execFileSync("yarn", ["db:migrate-sqlite", "--db", "search", "--file", file, ...extra], {
+        encoding: "utf8",
+      });
+    run();
+
+    const after = new DatabaseSync(file, { readOnly: true });
+    const names = (after.prepare("SELECT name FROM d1_migrations ORDER BY id").all() as Array<{ name: string }>).map(
+      (r) => r.name
+    );
+    expect(names.at(-1)).toBe("0014_prereq_drop_raw_text.sql");
+    expect(names).toHaveLength(14);
+    const cols = (after.prepare("PRAGMA table_info(course_prereq)").all() as Array<{ name: string }>).map((c) => c.name);
+    expect(cols).toContain("ast_json");
+    expect(cols).not.toContain("raw_text");
+    after.close();
+
+    expect(run("--dryRun")).toContain("0 pending");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

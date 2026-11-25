@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { findLocalD1File } from "./d1-helpers";
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
@@ -511,6 +511,45 @@ test("admin rollups is idempotent across re-runs (upsert + delete-stale)", async
     ).length;
     expect(distinctStamps).toBe(1);
   } finally {
+    adb.close();
+  }
+});
+
+test("daily command refreshes, rolls up, and builds prereqs", () => {
+  // The home server's cron entry point: the RefreshWorkflow sequence run from
+  // the Node CLI straight against the SQLite files. Scoped to TERM so the
+  // read-path fixtures are untouched.
+  const started = Date.now();
+  const out = execFileSync("yarn", ["ingest", "daily", "--term", TERM, "--delayMs", "0"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      D1_MODE: "local",
+      SEARCH_D1_LOCAL_FILE: findLocalD1File("course_section"),
+      ANALYTICS_D1_LOCAL_FILE: findLocalD1File("course_term_stats"),
+      SIS_BASE_URL: "http://127.0.0.1:9999/StudentRegistrationSsb",
+      LOG_SOURCE: "0",
+    },
+  });
+  const result = JSON.parse(out.slice(out.indexOf("{")));
+  expect(result.ok).toBe(true);
+  expect(result.terms.map((t: { term: string }) => t.term)).toEqual([TERM]);
+  expect(result.rollups).toEqual([TERM]);
+  expect(Array.isArray(result.prereqs)).toBe(true);
+
+  const db = new DatabaseSync(findLocalD1File("course_section"), { readOnly: true });
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), { readOnly: true });
+  try {
+    const run = db
+      .prepare("SELECT COUNT(*) AS n FROM sync_run WHERE term = ? AND started_at >= ?")
+      .get(TERM, started) as { n: number };
+    expect(run.n).toBeGreaterThan(0);
+    const stats = adb
+      .prepare("SELECT MAX(synced_at) AS s FROM course_term_stats WHERE term = ?")
+      .get(TERM) as { s: number | null };
+    expect(stats.s).toBeGreaterThanOrEqual(started);
+  } finally {
+    db.close();
     adb.close();
   }
 });

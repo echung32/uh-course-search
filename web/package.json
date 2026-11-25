@@ -12,6 +12,7 @@
     "db:snapshot": "node scripts/snapshot.mjs",
     "ingest": "tsx scripts/ingest.ts",
     "gateway": "tsx gateway/main.ts",
+    "db:migrate-sqlite": "tsx scripts/migrate-sqlite.ts",
     "astro": "astro",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
