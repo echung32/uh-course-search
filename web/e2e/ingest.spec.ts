@@ -25,6 +25,18 @@ async function searchCount(
   return (await res.json()).totalCount as number;
 }
 
+// Gateway round-trip counter from e2e/gateway-server.ts; null when the suite
+// runs on the native D1 bindings (E2E_NATIVE_D1=1).
+const GATEWAY_COUNTER = "http://127.0.0.1:8789/count";
+async function resetGatewayCount(): Promise<void> {
+  if (process.env.E2E_NATIVE_D1 === "1") return;
+  await fetch(GATEWAY_COUNTER, { method: "DELETE" });
+}
+async function gatewayCount(): Promise<number | null> {
+  if (process.env.E2E_NATIVE_D1 === "1") return null;
+  return ((await (await fetch(GATEWAY_COUNTER)).json()) as { count: number }).count;
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("admin sync ingests the mock catalog into D1", async ({ request }) => {
@@ -203,7 +215,13 @@ test("page cache serves a dynamic term from Banner, then from D1", async ({ requ
   // the page from the cache. This is the regression guard for the original bug:
   // a subject-less search on a not-yet-backfilled term returned nothing.
   const DYN = "202740";
+  await resetGatewayCount();
   expect(await searchCount(request, { term: DYN, pageMaxSize: "50" })).toBe(9); // 6 ICS + 3 MATH
+  // Every gateway round-trip is a Worker subrequest (~50/invocation on the Free
+  // plan, shared with the live Banner calls) — the heaviest request, a live
+  // page-cache fill, must stay well inside it.
+  const calls = await gatewayCount();
+  if (calls !== null) expect(calls).toBeLessThanOrEqual(30);
 
   // A subject-scoped page on the same dynamic term (a distinct cache key).
   expect(await searchCount(request, { term: DYN, subject: "ICS", pageMaxSize: "50" })).toBe(6);
