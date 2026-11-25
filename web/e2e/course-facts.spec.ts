@@ -207,6 +207,28 @@ test("changed description is reported", async () => {
   expect(r.changedDescriptions.length).toBe(1);
 });
 
+test("a whitespace/entity-only description difference is not a change", async () => {
+  await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0 });
+  const where = "WHERE term = ? AND subject = 'ICS' AND course_number = '141'";
+  const { description } = f.raw.prepare(`SELECT description FROM course ${where}`).get(TERM) as {
+    description: string;
+  };
+  expect(description.length).toBeGreaterThan(0);
+  // Same text, Banner-style: spaces as &nbsp; / line breaks / runs, padded.
+  const variant = `  ${description.replace(/ /g, (_, i: number) => (i % 2 ? "&nbsp;" : " \n  "))}\n`;
+  expect(variant).not.toBe(description);
+  f.raw.prepare(`UPDATE course SET description = ? ${where}`).run(variant, TERM);
+  const r = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0 });
+  expect(r.changedDescriptions).toEqual([]);
+});
+
+test("normalizeDescription decodes entities and collapses whitespace", () => {
+  expect(cf.normalizeDescription("  A&nbsp;&amp;\n\tB &lt;C&gt; &quot;D&quot; E&#39;s  ")).toBe(`A & B <C> "D" E's`);
+  // &amp; decodes last: an escaped entity stays literal.
+  expect(cf.normalizeDescription("&amp;lt;")).toBe("&lt;");
+  expect(cf.normalizeDescription("a b")).not.toBe(cf.normalizeDescription("a c"));
+});
+
 test("breaker: preflight rejection or 5 consecutive rejections trip; an accepted unit resets", () => {
   type Outcome = "accepted" | "rejected" | "unmapped";
   const run = (outcomes: Outcome[]) => {

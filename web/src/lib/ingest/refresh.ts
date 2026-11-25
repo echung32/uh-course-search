@@ -240,6 +240,7 @@ export async function refreshTermDetails(
       bannerExtra: b1Courses,
       ...fetchOpts,
     });
+    failures += out.facts.bannerFailed ?? 0;
     await materializeCatalogFacets(db, term, log);
 
     // 4. B1 restrictions + extras.
@@ -267,11 +268,15 @@ export async function refreshTermDetails(
     // 7. Cross-list: term-wide crseavail, else Banner for B1 ∪ rolling extras.
     const x = await syncCrossList(db, term, { fallbackCrns: dedupe([...b1, ...rollE]), ...fetchOpts });
     out.crossList = x.source;
+    failures += x.failed;
 
     // 8. Prereqs: B1 courses never fetched ∪ changed descriptions ∪ the stalest.
+    //    Description changes are capped at the prereq cap (a mass text change
+    //    can't trigger an unbounded pass); the rest wait for the prereq cursor.
     const wanted = new Map<string, CourseKey>();
     const b1Missing = b1.length > 0 ? await coursesOfCrns(db, term, b1, true) : [];
-    for (const k of [...b1Missing, ...out.facts.changedDescriptions]) wanted.set(ck(k), k);
+    const changed = out.facts.changedDescriptions.slice(0, caps.prereqs);
+    for (const k of [...b1Missing, ...changed]) wanted.set(ck(k), k);
     const stale = (await getStalePrereqCourses(db, term, caps.prereqs)).filter((k) => !wanted.has(ck(k)));
     for (const k of stale) wanted.set(ck(k), k);
     out.prereqsRolled = stale.length;

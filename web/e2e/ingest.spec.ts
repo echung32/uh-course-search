@@ -360,6 +360,9 @@ test("scheduled refresh: rolling Tier B2 refreshes stale details every run", asy
 test("daily refresh with crseavail failing still completes on Banner", async ({ request }) => {
   const mode = await request.post(`${MOCK_ORIGIN}/__mock/crseavail?mode=http500`);
   expect(mode.ok()).toBeTruthy();
+  // One Banner cross-list fallback fetch fails → the details phase is partial.
+  const fail = await request.post(`${MOCK_ORIGIN}/__mock/fail?endpoint=getXlstSections&crn=10002`);
+  expect(fail.ok()).toBeTruthy();
   try {
     const run = await request.post(`/api/admin/refresh-run?term=${TERM}&delayMs=0`, {
       headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
@@ -373,10 +376,14 @@ test("daily refresh with crseavail failing still completes on Banner", async ({ 
     // The preflight unit fails → breaker → every unit's courses go to Banner.
     expect(summary.crseavail).toBe("degraded");
     expect(summary.crossList).toBe("banner");
+    expect(summary.detailsStatus).toBe("partial");
     expect(summary.restrictionsRolled).toBe(9);
     expect(summary.extrasRolled).toBe(9);
   } finally {
-    await request.post(`${MOCK_ORIGIN}/__mock/crseavail?mode=ok`);
+    // /__mock/reset clears the fail rule + crseavail mode but rewinds the
+    // catalog: put it back on phase 2 for the rest of this serial file.
+    await request.post(`${MOCK_ORIGIN}/__mock/reset`);
+    await request.post(`${MOCK_ORIGIN}/__mock/advance`);
   }
 });
 
@@ -726,6 +733,8 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
   // bumps for every CRN). Every stamp is set recent, then 10004 loses its
   // restrictions stamp (but gets the NEWEST synced_at), 10005 gets the oldest
   // extras stamp, and ICS 311 loses its prereq stamp → each is the one picked.
+  // ICS 111 and ICS 141 get a stale description, so crseavail reports both as
+  // changed — but the prereq cap (1) admits only one of them.
   const recent = Date.now() - 1000;
   const seed = searchDb();
   try {
@@ -738,6 +747,9 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       .run(recent + 500, TERM);
     seed.prepare("UPDATE section_detail SET extras_synced_at = 1 WHERE term = ? AND crn = '10005'").run(TERM);
     seed.prepare("UPDATE course SET prereq_synced_at = NULL WHERE term = ? AND subject = 'ICS' AND course_number = '311'").run(TERM);
+    seed
+      .prepare("UPDATE course SET description = 'old' WHERE term = ? AND subject = 'ICS' AND course_number IN ('111', '141')")
+      .run(TERM);
   } finally {
     seed.close();
   }
@@ -789,6 +801,13 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       .prepare("SELECT prereq_synced_at AS p FROM course WHERE term = ? AND subject = 'ICS' AND course_number = '311'")
       .get(TERM) as { p: number | null };
     expect(prereq.p).toBeGreaterThanOrEqual(started);
+    // Prereq fetches this run: ICS 311 (stale) + exactly one changed description.
+    const refetched = db
+      .prepare("SELECT subject || ' ' || course_number AS c FROM course WHERE term = ? AND prereq_synced_at >= ? ORDER BY 1")
+      .all(TERM, started) as Array<{ c: string }>;
+    expect(refetched).toHaveLength(2);
+    expect(refetched.map((r) => r.c)).toContain("ICS 311");
+    expect(refetched.filter((r) => r.c === "ICS 111" || r.c === "ICS 141")).toHaveLength(1);
     // The details run records the crseavail health in sync_run.notes.
     const notes = db
       .prepare("SELECT notes FROM sync_run WHERE term = ? AND kind = 'details' AND started_at >= ? ORDER BY id DESC")

@@ -64,6 +64,8 @@ export interface CourseFactsResult {
   written: number;
   /** Course rows written from Banner. */
   bannerCourses: number;
+  /** Banner fallback courses that failed (no write). */
+  bannerFailed?: number;
   /** Courses whose stored description changed (crseavail path). */
   changedDescriptions: CourseKey[];
   /** Fallback units by reason (`breaker` = skipped after a trip, `off` = disabled). */
@@ -101,6 +103,24 @@ const ck = (k: { campus: string; subject: string; courseNumber: string }) =>
 const isGap = (c: TermCourse) => c.factsAt === null;
 const pastDeadline = (d?: number) => d !== undefined && Date.now() > d;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Description text for change detection: HTML entities decoded (`&amp;` last,
+ * so `&amp;lt;` stays `&lt;`), every whitespace run collapsed to one space,
+ * trimmed. Stored text is often Banner-parsed while crseavail's is raw, so a
+ * plain `!==` would flag formatting-only differences as changes.
+ */
+export function normalizeDescription(s: string): string {
+  return s
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function envCap(): number {
   const n = Number(process.env.REFRESH_ROLLING_FACTS_COURSES);
@@ -420,6 +440,7 @@ export async function syncCourseFacts(
   if (chosen.length > 0) {
     const b = await bannerCourseFacts(db, term, chosen.map((c) => c.key), opts);
     result.bannerCourses = b.done;
+    result.bannerFailed = b.failed;
   }
   log(
     `[${term}] course facts (${result.source}): ${result.written} crseavail, ${result.bannerCourses} banner, ` +
@@ -490,7 +511,11 @@ async function fetchAndApplyUnit(
       }
       const n = await namesFor(tc.key.campus, e.facts.collegeCode, e.facts.departmentCode, tc.crn);
       const facts: CourseFacts = { ...e.facts, ...n, scheduleTypes };
-      if (tc.description !== null && facts.description !== null && tc.description !== facts.description) {
+      if (
+        tc.description !== null &&
+        facts.description !== null &&
+        normalizeDescription(tc.description) !== normalizeDescription(facts.description)
+      ) {
         result.changedDescriptions.push(tc.key);
       }
       await upsertCourseFacts(db, tc.key, facts, "crseavail", Date.now());

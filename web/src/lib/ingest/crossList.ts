@@ -18,14 +18,15 @@ const pastDeadline = (d?: number) => d !== undefined && Date.now() > d;
  * many term CRNs as we hold cross-listed is authoritative for EVERY term CRN
  * (CRNs in no group become NULL — the one guarded crseavail null, spec §3.3).
  * Otherwise Banner `getCrossListSections` runs for `fallbackCrns` only.
+ * `failed` counts Banner fallback CRNs that could not be fetched.
  */
 export async function syncCrossList(
   db: D1Like,
   term: string,
   opts: { fallbackCrns: string[]; delayMs?: number; deadline?: number; log?: (m: string) => void }
-): Promise<{ source: "crseavail" | "banner" | "skipped"; written: number }> {
+): Promise<{ source: "crseavail" | "banner" | "skipped"; written: number; failed: number }> {
   const log = opts.log ?? (() => {});
-  if (pastDeadline(opts.deadline)) return { source: "skipped", written: 0 };
+  if (pastDeadline(opts.deadline)) return { source: "skipped", written: 0, failed: 0 };
 
   if (crseavailEnabled()) {
     let reason: string | null = null;
@@ -56,7 +57,7 @@ export async function syncCrossList(
         const entries = termCrns.map((crn) => ({ crn, crossListCrns: m.get(crn) ?? null }));
         await upsertSectionCrossLists(db, term, entries, Date.now());
         log(`[${term}] cross-list (crseavail): ${entries.length} CRNs, ${present} cross-listed`);
-        return { source: "crseavail", written: entries.length };
+        return { source: "crseavail", written: entries.length, failed: 0 };
       }
     } catch (err) {
       if (!(err instanceof CrseavailError)) throw err;
@@ -67,5 +68,5 @@ export async function syncCrossList(
 
   const b = await bannerCrossList(db, term, opts.fallbackCrns, opts);
   log(`[${term}] cross-list (banner): ${b.done}/${opts.fallbackCrns.length} CRNs`);
-  return { source: "banner", written: b.done };
+  return { source: "banner", written: b.done, failed: b.failed.length };
 }
