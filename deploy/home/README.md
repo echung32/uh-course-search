@@ -66,10 +66,20 @@ machine with wrangler auth.
    docker compose up -d
    curl -fsS 127.0.0.1:8787/healthz    # → ok
    ```
-6. **Tunnel and Access.**
-   - Add the rule from `cloudflared-ingress.example.yml` to the host cloudflared config.
-   - Run `cloudflared tunnel route dns <tunnel> <gateway-host>`, then restart cloudflared.
-   - In Zero Trust, create a service token, then a self-hosted Access application on `<gateway-host>` with a single **Service Auth** policy that allows only that token.
+6. **Tunnel and Access.** First check how the host's cloudflared is configured:
+   `systemctl cat cloudflared`.
+   - **Dashboard-managed tunnel**, where `ExecStart` runs `tunnel run --token …`.
+     The local `config.yml` is ignored. In Zero Trust → Networks → Tunnels →
+     your tunnel → Public Hostnames, add `<gateway-host>` → `http://127.0.0.1:8787`.
+     Through the API, that means GET then PUT
+     `/accounts/<acct>/cfd_tunnel/<id>/configurations` with the rule inserted before
+     the catch-all. This also creates the DNS record. No restart or sudo is needed.
+   - **Locally-managed tunnel**, where `ExecStart` uses `--config`. Add the rule from
+     `cloudflared-ingress.example.yml` to that config. Then run
+     `cloudflared tunnel route dns <tunnel> <gateway-host>` and restart cloudflared.
+   - Either way, in Zero Trust, create a service token. Then create a self-hosted
+     Access application on `<gateway-host>` with a single **Service Auth** policy
+     that allows only that token.
 7. **Check through the tunnel** from another machine. This should return `n: 103` (the term count).
    ```bash
    curl -sS https://<gateway-host>/v1/query \
