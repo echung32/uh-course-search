@@ -6,11 +6,7 @@ import { Button } from "@/components/ui/button";
 import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime";
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
-import {
-  FillRateLeaderboard,
-  type LeaderboardMetric,
-  type LeaderboardRow,
-} from "./FillRateLeaderboard";
+import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
 import { SubjectGrowth } from "./SubjectGrowth";
 import { MeetingHeatmap, type MeetingHeatCell } from "./MeetingHeatmap";
 import { classifyTerm, stripViewOnly, type Semester } from "./termFilter";
@@ -268,10 +264,9 @@ function AnalyticsAppInner({
   );
   const [lbTerm, setLbTerm] = React.useState("");
   const [lbCampus, setLbCampus] = React.useState("");
-  const [lbSort, setLbSort] = React.useState<LeaderboardMetric>("fillRate");
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
-    const params = new URLSearchParams({ limit: "20", sort: lbSort });
+    const params = new URLSearchParams({ limit: "20" });
     if (lbTerm) params.set("term", lbTerm);
     if (lbCampus) params.set("campus", lbCampus);
     fetch(`/api/analytics/fill-rate?${params}`)
@@ -282,7 +277,7 @@ function AnalyticsAppInner({
         if (!lbTerm && d.term) setLbTerm(d.term);
       })
       .catch(() => setRows([]));
-  }, [lbTerm, lbCampus, lbSort]);
+  }, [lbTerm, lbCampus]);
 
   // ── Chart #6: subject growth ranking ──
   // Shares the dashboard term-range + semester filters: growth is measured
@@ -398,7 +393,7 @@ function AnalyticsAppInner({
         </div>
       </div>
 
-      <Section title="Course enrollment over time" description="Enrollment, capacity, and waitlist per term for one course, for one campus or summed across all.">
+      <Section title="Course enrollment over time" description="Enrollment and capacity per term for one course, for one campus or summed across all.">
         <div className="mb-3 flex flex-wrap gap-2">
           <div className="max-w-xs flex-1">
             <Combobox
@@ -437,11 +432,7 @@ function AnalyticsAppInner({
 
       <Section
         title="Course demand"
-        description={
-          lbSort === "waitlist"
-            ? "Courses ranked by total waitlist headcount for the selected term — demand that fill rate alone hides."
-            : "Courses ranked by fill rate (enrollment ÷ capacity) for the selected term, across all campuses or one."
-        }
+        description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term."
       >
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="max-w-xs flex-1">
@@ -463,12 +454,8 @@ function AnalyticsAppInner({
               searchPlaceholder="Search campuses"
             />
           </div>
-          <div className="flex gap-2">
-            <Button type="button" size="sm" variant={lbSort === "fillRate" ? "default" : "outline"} aria-pressed={lbSort === "fillRate"} onClick={() => setLbSort("fillRate")}>Fill rate</Button>
-            <Button type="button" size="sm" variant={lbSort === "waitlist" ? "default" : "outline"} aria-pressed={lbSort === "waitlist"} onClick={() => setLbSort("waitlist")}>Waitlist</Button>
-          </div>
         </div>
-        <FillRateLeaderboard rows={rows} metric={lbSort} />
+        <FillRateLeaderboard rows={rows} />
       </Section>
 
       <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">

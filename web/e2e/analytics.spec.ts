@@ -90,27 +90,24 @@ test("api: fill-rate campus filter scopes the ranking to one campus", async ({ r
   expect(labels).not.toContain("ICS 1110");
 });
 
-test("api: fill-rate sort=waitlist ranks by waitlist headcount", async ({ request }) => {
-  const res = await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=20");
+test("api: fill-rate ignores a legacy sort=waitlist and excludes uncapped courses", async ({ request }) => {
+  const res = await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50");
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
-  expect(body.sort).toBe("waitlist");
-  // ARR 999 is uncapped (capped_sections=0) but has the largest waitlist (30),
-  // so it ranks first — the waitlist view must surface uncapped high-demand
-  // courses that the fill-rate gate would drop.
-  expect(body.rows[0].subjectCourse).toBe("ARR 999");
-  expect(body.rows[0].waitlist).toBeGreaterThanOrEqual(body.rows[1].waitlist);
+  expect(body.sort).toBeUndefined();
+  const labels = body.rows.map((r: { subjectCourse: string | null }) => r.subjectCourse);
+  // ARR 999 is uncapped (capped_sections=0) → no real fill-rate denominator.
+  expect(labels).not.toContain("ARR 999");
+  for (let i = 1; i < body.rows.length; i++) {
+    expect(body.rows[i - 1].fillRate).toBeGreaterThanOrEqual(body.rows[i].fillRate);
+  }
 });
 
-test("api: fill-rate (default sort) excludes uncapped courses; waitlist includes them", async ({ request }) => {
-  const fill = await (await request.get("/api/analytics/fill-rate?term=202710&limit=50")).json();
-  const wait = await (await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50")).json();
-  const labels = (b: { rows: Array<{ subjectCourse: string | null }> }) =>
-    b.rows.map((r) => r.subjectCourse);
-  // capped_sections=0 → no real fill-rate denominator → excluded from fill-rate.
-  expect(labels(fill)).not.toContain("ARR 999");
-  // …but present under waitlist sort.
-  expect(labels(wait)).toContain("ARR 999");
+test("page: analytics shows no waitlist controls or series", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("button", { name: "Waitlist" })).toHaveCount(0);
+  await expect(page.locator(".recharts-legend-wrapper").getByText("Waitlist")).toHaveCount(0);
 });
 
 test("api: subject-trend returns per-term subject facet points", async ({ request }) => {
