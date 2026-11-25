@@ -399,28 +399,63 @@ export async function getSectionDetail(
 }
 
 /**
- * The CRNs whose section detail is stalest for a term — the rolling Tier B2
- * cursor (docs/plans/scheduled-refresh.md). Never-fetched sections (no
- * section_detail row) sort first via COALESCE(...,0); then oldest synced_at.
- * Sized by the caller so a term fully cycles within the freshness window.
+ * The CRNs whose `column` fragment is stalest for a term — a rolling refresh
+ * cursor (spec §6.2). Never-fetched CRNs (no section_detail row, or a NULL
+ * stamp) sort first via COALESCE(...,0); then the oldest stamp. `exclude` (e.g.
+ * this run's B1 set) is filtered in JS rather than bound, so a large list can't
+ * exceed the remote-D1 bound-parameter cap: over-fetch by its length, drop, cap.
  */
-export async function getStaleDetailCrns(
+export async function getStaleSectionCrns(
   db: D1Like,
   term: string,
-  limit: number
+  column: "restrictions_synced_at" | "extras_synced_at",
+  limit: number,
+  exclude: string[]
 ): Promise<string[]> {
+  if (limit <= 0) return [];
+  // `column` is a closed union, never user input — safe to interpolate.
   const { results } = await db
     .prepare(
       `SELECT cs.crn AS crn
          FROM course_section cs
          LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
         WHERE cs.term = ?
-        ORDER BY COALESCE(sd.synced_at, 0) ASC, cs.crn ASC
+        ORDER BY COALESCE(sd.${column}, 0) ASC, cs.crn ASC
+        LIMIT ?`
+    )
+    .bind(term, limit + exclude.length)
+    .all<{ crn: string }>();
+  const skip = new Set(exclude);
+  return results.map((r) => r.crn).filter((c) => !skip.has(c)).slice(0, limit);
+}
+
+/**
+ * The courses whose prereqs/coreqs are stalest for a term — the rolling prereq
+ * cursor: NULL `prereq_synced_at` first, then the oldest. Only course rows that
+ * still have a section this term: the prereq write is an UPDATE fetched on the
+ * course's MIN(crn), so a rowless or section-less course could never be stamped
+ * and would sit at the head of the cursor forever.
+ */
+export async function getStalePrereqCourses(
+  db: D1Like,
+  term: string,
+  limit: number
+): Promise<CourseKey[]> {
+  if (limit <= 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT c.campus_description AS campus, c.subject, c.course_number AS courseNumber
+         FROM course c
+        WHERE c.term = ?
+          AND EXISTS (SELECT 1 FROM course_section cs
+                       WHERE cs.term = c.term AND IFNULL(cs.campus_description, '') = c.campus_description
+                         AND cs.subject = c.subject AND cs.course_number = c.course_number)
+        ORDER BY COALESCE(c.prereq_synced_at, 0) ASC, 1, 2, 3
         LIMIT ?`
     )
     .bind(term, limit)
-    .all<{ crn: string }>();
-  return results.map((r) => r.crn);
+    .all<{ campus: string; subject: string; courseNumber: string }>();
+  return results.map((r) => ({ term, campus: r.campus, subject: r.subject, courseNumber: r.courseNumber }));
 }
 
 /**

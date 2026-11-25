@@ -26,7 +26,9 @@
  * `daily` is the home server's scheduled entry point (compose `cron` service):
  * the RefreshWorkflow sequence — refresh the term list + every mutable term,
  * recompute each refreshed term's analytics rollups, rebuild the primary
- * prerequisite graph. Exits non-zero if any term's sync errored.
+ * prerequisite graph. Each term's summary carries the per-fragment rolled
+ * counts and the crseavail health (`crseavail`: crseavail | degraded | off).
+ * Exits non-zero if any term's sync or details phase errored.
  */
 import { getDb, getAnalyticsDb } from "@/lib/db/client";
 import { refreshTerms } from "@/lib/ingest/terms";
@@ -189,7 +191,9 @@ async function main() {
         rollups.push(t.term);
       }
       const prereqs = await buildAllPrereqGraphs(db, { log });
-      const failed = refresh.terms.filter((t) => t.syncStatus === "error").map((t) => t.term);
+      const failed = refresh.terms
+        .filter((t) => t.syncStatus === "error" || t.detailsStatus === "error")
+        .map((t) => t.term);
       console.log(
         JSON.stringify({ ok: failed.length === 0, failed, terms: refresh.terms, rollups, prereqs }, null, 2)
       );

@@ -17,6 +17,10 @@ import type { SectionDiff } from "@/lib/ingest/diff";
 
 /**
  * Daily scheduled refresh of non-view-only terms (docs/plans/scheduled-refresh.md).
+ * Currently UNSCHEDULED: the daily refresh runs as `yarn ingest daily` on the home
+ * server (lib/ingest/refresh.ts — per-fragment rolling caps + crseavail course
+ * facts). This Workflow keeps the older whole-row details path (syncDetails on a
+ * planTermDetailCrns set) and is not kept in step with that one.
  *
  * Each term is broken into bounded steps so no single step approaches the
  * 10-minute Cloudflare Workflow step timeout, even for the 9 k-section term:
@@ -29,20 +33,20 @@ import type { SectionDiff } from "@/lib/ingest/diff";
  *                               lost on resume).
  *   3. finalize ${code}    — markTermSynced with the aggregated status.
  *   4. prune details ${code}     — delete section_detail rows for dropped CRNs.
- *      plan details ${code}      — compute the deduped, capped CRN set (B1 + rolling B2).
+ *      plan details ${code}      — compute the deduped, capped CRN set (B1 + stalest restrictions).
  *      details ${code} chunk N/M — fetch details for one DETAIL_STEP_SIZE-CRN slice;
  *                                  repeated M times so no step nears the 10-min timeout.
  *   5. step.sleep          — 5-second pace before next term.
  *
  * Why bounded: a batch covers exactly one session's worth of subjects (~40). The
  * detail phase splits into DETAIL_STEP_SIZE-CRN steps; the total is capped by
- * REFRESH_ROLLING_DETAIL_CRNS inside planTermDetailCrns. No step can blow the
+ * the restrictions rolling cap inside planTermDetailCrns. No step can blow the
  * 10-min limit regardless of term size or diff size.
  *
  * Two deliberate scope notes:
  *   - Cold start: a never-backfilled term classifies every section as "new", so its
  *     details phase has many CRNs — but each step is bounded by DETAIL_STEP_SIZE,
- *     and the total is capped by REFRESH_ROLLING_DETAIL_CRNS. In practice mutable
+ *     and the total is capped by the restrictions rolling cap. In practice mutable
  *     terms are backfilled out-of-band (admin sync / sync-details) before the daily
  *     sweep ever sees them, so the steady-state diff is small.
  *   - sync_run bookkeeping: unlike the CLI/admin syncTerm path, the bounded Workflow
@@ -62,8 +66,8 @@ const SUBJECTS_PER_BATCH = DEFAULT_SUBJECTS_PER_SESSION;
 
 // CRNs per bounded details step. Each CRN's detail fetch is ~6 Banner calls, so
 // keep batches small enough that a step stays well under the 10-min step timeout
-// even when Banner is slow. (Total per term per run is capped by
-// REFRESH_ROLLING_DETAIL_CRNS inside planTermDetailCrns.)
+// even when Banner is slow. (Total per term per run is capped by the
+// restrictions rolling cap inside planTermDetailCrns.)
 const DETAIL_STEP_SIZE = 30;
 
 function chunk<T>(a: T[], n: number): T[][] {
