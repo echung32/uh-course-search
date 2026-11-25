@@ -36,15 +36,52 @@ interface AnalyticsAppProps {
   rollupTerms: string[];
 }
 
+/** One chart card. */
 function Section({ title, description, children }: {
   title: string; description: string; children: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border bg-card p-4">
-      <h2 className="text-base font-semibold">{title}</h2>
+      <h3 className="text-base font-semibold">{title}</h3>
       <p className="mb-3 text-sm text-muted-foreground">{description}</p>
       {children}
     </section>
+  );
+}
+
+/**
+ * A group of charts that share one filter bar. The bar sits in the group's
+ * tinted header and its subtitle states it applies to every chart below, so a
+ * reader can tell group-wide filters from a chart's own ("This chart") controls.
+ */
+function ControlGroup({ id, title, subtitle, controls, children }: {
+  id: string; title: string; subtitle: string;
+  controls: React.ReactNode; children: React.ReactNode;
+}) {
+  const headingId = `${id}-heading`;
+  return (
+    <section aria-labelledby={headingId} className="overflow-hidden rounded-lg border">
+      <div className="border-b bg-muted/50 p-4">
+        <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h2 id={headingId} className="text-lg font-semibold">{title}</h2>
+          <p className="text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        {controls}
+      </div>
+      <div className="space-y-4 p-4">{children}</div>
+    </section>
+  );
+}
+
+/** A chart's own controls, visibly marked as affecting only that chart. */
+function LocalControls({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-dashed px-2 py-1.5">
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        This chart
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -95,6 +132,11 @@ function AnalyticsAppInner({
       spring: parseAsBoolean.withDefault(true),
       summer: parseAsBoolean.withDefault(true),
       special: parseAsBoolean.withDefault(false),
+      // "One term" group: drives both single-term charts (Course demand + When
+      // classes meet). Empty term = newest rollup term, resolved by the
+      // fill-rate API and written back here.
+      term: parseAsString.withDefault(""),
+      campus: parseAsString.withDefault(""),
     },
     { history: "replace" }
   );
@@ -262,22 +304,22 @@ function AnalyticsAppInner({
     () => campuses.map((c) => ({ value: c, label: c })),
     [campuses]
   );
-  const [lbTerm, setLbTerm] = React.useState("");
-  const [lbCampus, setLbCampus] = React.useState("");
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
     const params = new URLSearchParams({ limit: "20" });
-    if (lbTerm) params.set("term", lbTerm);
-    if (lbCampus) params.set("campus", lbCampus);
+    if (q.term) params.set("term", q.term);
+    if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/fill-rate?${params}`)
       .then((r) => r.json())
       .then((d) => {
         setRows(d.rows ?? []);
         // On the initial empty-term load, sync the picker to the term the API chose.
-        if (!lbTerm && d.term) setLbTerm(d.term);
+        if (!q.term && d.term) setQ({ term: d.term });
       })
       .catch(() => setRows([]));
-  }, [lbTerm, lbCampus]);
+    // setQ is stable (nuqs); omitted so it never retriggers the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.term, q.campus]);
 
   // ── Chart #6: subject growth ranking ──
   // Shares the dashboard term-range + semester filters: growth is measured
@@ -295,197 +337,185 @@ function AnalyticsAppInner({
   );
 
   // ── Chart #7: meeting-time heatmap ──
-  // A single-term snapshot (its own term + campus pickers), independent of the
-  // trend-chart range filter.
-  const [hmTerm, setHmTerm] = React.useState("");
-  const [hmCampus, setHmCampus] = React.useState("");
+  // Shares the "One term" group's term + campus. Waits for the term to resolve
+  // (the fill-rate fetch picks the default) so both charts show the same term.
   const [heat, setHeat] = React.useState<MeetingHeatCell[]>([]);
   React.useEffect(() => {
-    const params = new URLSearchParams();
-    if (hmTerm) params.set("term", hmTerm);
-    if (hmCampus) params.set("campus", hmCampus);
+    if (!q.term) return;
+    const params = new URLSearchParams({ term: q.term });
+    if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/meeting-heatmap?${params}`)
       .then((r) => r.json())
-      .then((d) => {
-        setHeat(d.cells ?? []);
-        if (!hmTerm && d.term) setHmTerm(d.term);
-      })
+      .then((d) => setHeat(d.cells ?? []))
       .catch(() => setHeat([]));
-  }, [hmTerm, hmCampus]);
+  }, [q.term, q.campus]);
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border bg-card p-4">
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-          <div>
-            <p className="mb-1 text-sm font-medium">Term range</p>
-            <div className="flex items-center gap-2">
-              <div className="w-40">
-                <Combobox
-                  options={termRangeOptions}
-                  value={fromValue}
-                  onChange={setFromTerm}
-                  clearLabel={oldest ? `Earliest (${termLabel(oldest)})` : "Earliest"}
-                  placeholder="Earliest"
-                  searchPlaceholder="Search terms"
-                />
+    <div className="space-y-8">
+      <ControlGroup
+        id="trends"
+        title="Trends over time"
+        subtitle="These filters apply to all 4 charts in this group"
+        controls={
+          <>
+            <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+              <div>
+                <p className="mb-1 text-sm font-medium">Term range</p>
+                <div className="flex items-center gap-2">
+                  <div className="w-40">
+                    <Combobox
+                      options={termRangeOptions}
+                      value={fromValue}
+                      onChange={setFromTerm}
+                      clearLabel={oldest ? `Earliest (${termLabel(oldest)})` : "Earliest"}
+                      placeholder="Earliest"
+                      searchPlaceholder="Search terms"
+                    />
+                  </div>
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <div className="w-40">
+                    <Combobox
+                      options={termRangeOptionsDesc}
+                      value={toValue}
+                      onChange={setToTerm}
+                      clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
+                      placeholder="Latest"
+                      searchPlaceholder="Search terms"
+                    />
+                  </div>
+                </div>
               </div>
-              <span className="text-sm text-muted-foreground">to</span>
-              <div className="w-40">
-                <Combobox
-                  options={termRangeOptionsDesc}
-                  value={toValue}
-                  onChange={setToTerm}
-                  clearLabel={newest ? `Latest (${termLabel(newest)})` : "Latest"}
-                  placeholder="Latest"
-                  searchPlaceholder="Search terms"
-                />
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant={isLastYears(3) ? "default" : "outline"} aria-pressed={isLastYears(3)} onClick={() => setLastYears(3)}>Last 3 yrs</Button>
+                <Button type="button" size="sm" variant={isLastYears(5) ? "default" : "outline"} aria-pressed={isLastYears(5)} onClick={() => setLastYears(5)}>Last 5 yrs</Button>
+                <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} aria-pressed={isFullRange} onClick={resetRange}>All time</Button>
               </div>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant={isLastYears(3) ? "default" : "outline"} aria-pressed={isLastYears(3)} onClick={() => setLastYears(3)}>Last 3 yrs</Button>
-            <Button type="button" size="sm" variant={isLastYears(5) ? "default" : "outline"} aria-pressed={isLastYears(5)} onClick={() => setLastYears(5)}>Last 5 yrs</Button>
-            <Button type="button" size="sm" variant={isFullRange ? "default" : "outline"} aria-pressed={isFullRange} onClick={resetRange}>All time</Button>
-          </div>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">Semesters</span>
-          {(["Fall", "Spring", "Summer"] as const).map((s) => (
-            <Button
-              key={s}
-              type="button"
-              size="sm"
-              variant={semesters[s] ? "default" : "outline"}
-              aria-pressed={semesters[s]}
-              onClick={() => toggleSemester(s)}
-            >
-              {s}
-            </Button>
-          ))}
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-          <Button
-            type="button"
-            size="sm"
-            variant={showSpecial ? "default" : "outline"}
-            aria-pressed={showSpecial}
-            onClick={() => setQ({ special: !showSpecial })}
-          >
-            Special sessions
-          </Button>
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">Semesters</span>
+              {(["Fall", "Spring", "Summer"] as const).map((s) => (
+                <Button
+                  key={s}
                   type="button"
-                  aria-label="What are special sessions?"
-                  className="text-muted-foreground transition-colors hover:text-foreground"
+                  size="sm"
+                  variant={semesters[s] ? "default" : "outline"}
+                  aria-pressed={semesters[s]}
+                  onClick={() => toggleSemester(s)}
                 >
-                  <Info className="h-4 w-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                Off-cycle sub-terms — Extension, Apprenticeship, and Accelerated
-                sessions.
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
-
-      <Section title="Course enrollment over time" description="Enrollment and capacity per term for one course, for one campus or summed across all.">
-        <div className="mb-3 flex flex-wrap gap-2">
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={courseOptions}
-              value={courseKey}
-              onChange={setCourseKey}
-              placeholder="Select a course"
-              searchPlaceholder="Search courses"
-            />
-          </div>
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={campusOptions}
-              value={campus}
-              onChange={setCampus}
-              clearLabel="All campuses"
-              placeholder="All campuses"
-              searchPlaceholder="Search campuses"
-            />
-          </div>
-        </div>
-        <EnrollmentOverTime points={shownPoints} termLabel={chartTermLabel} />
-      </Section>
-
-      <Section title="University enrollment trend" description="Total enrollment per term, stacked by campus or college.">
-        <div className="mb-3 flex gap-2">
-          <Button type="button" size="sm" variant={facet === "campus" ? "default" : "outline"} onClick={() => setFacet("campus")}>By campus</Button>
-          <Button type="button" size="sm" variant={facet === "college" ? "default" : "outline"} onClick={() => setFacet("college")}>By college</Button>
-        </div>
-        <UniversityTrend points={uniInRange} termLabel={chartTermLabel} />
-      </Section>
-
-      <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
-        <DeliveryModeShift points={deliveryInRange} termLabel={chartTermLabel} />
-      </Section>
-
-      <Section
-        title="Course demand"
-        description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term."
+                  {s}
+                </Button>
+              ))}
+              <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+              <Button
+                type="button"
+                size="sm"
+                variant={showSpecial ? "default" : "outline"}
+                aria-pressed={showSpecial}
+                onClick={() => setQ({ special: !showSpecial })}
+              >
+                Special sessions
+              </Button>
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="What are special sessions?"
+                      className="text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Off-cycle sub-terms — Extension, Apprenticeship, and Accelerated
+                    sessions.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </>
+        }
       >
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={termOptions}
-              value={lbTerm}
-              onChange={setLbTerm}
-              placeholder="Select a term"
-              searchPlaceholder="Search terms"
-            />
-          </div>
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={campusFilterOptions}
-              value={lbCampus}
-              onChange={setLbCampus}
-              clearLabel="All campuses"
-              placeholder="All campuses"
-              searchPlaceholder="Search campuses"
-            />
-          </div>
-        </div>
-        <FillRateLeaderboard rows={rows} />
-      </Section>
+        <Section title="Course enrollment over time" description="Enrollment and capacity per term for one course, for one campus or summed across all.">
+          <LocalControls>
+            <div className="min-w-48 max-w-xs flex-1">
+              <Combobox
+                options={courseOptions}
+                value={courseKey}
+                onChange={setCourseKey}
+                placeholder="Select a course"
+                searchPlaceholder="Search courses"
+              />
+            </div>
+            <div className="min-w-48 max-w-xs flex-1">
+              <Combobox
+                options={campusOptions}
+                value={campus}
+                onChange={setCampus}
+                clearLabel="All campuses"
+                placeholder="All campuses"
+                searchPlaceholder="Search campuses"
+              />
+            </div>
+          </LocalControls>
+          <EnrollmentOverTime points={shownPoints} termLabel={chartTermLabel} />
+        </Section>
 
-      <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">
-        <SubjectGrowth points={subjectInRange} termLabel={chartTermLabel} />
-      </Section>
+        <Section title="University enrollment trend" description="Total enrollment per term, stacked by campus or college.">
+          <LocalControls>
+            <Button type="button" size="sm" variant={facet === "campus" ? "default" : "outline"} aria-pressed={facet === "campus"} onClick={() => setFacet("campus")}>By campus</Button>
+            <Button type="button" size="sm" variant={facet === "college" ? "default" : "outline"} aria-pressed={facet === "college"} onClick={() => setFacet("college")}>By college</Button>
+          </LocalControls>
+          <UniversityTrend points={uniInRange} termLabel={chartTermLabel} />
+        </Section>
 
-      <Section title="When classes meet" description="Number of class meetings by day of week and start time for the selected term.">
-        <div className="mb-3 flex flex-wrap gap-2">
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={termOptions}
-              value={hmTerm}
-              onChange={setHmTerm}
-              placeholder="Select a term"
-              searchPlaceholder="Search terms"
-            />
+        <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
+          <DeliveryModeShift points={deliveryInRange} termLabel={chartTermLabel} />
+        </Section>
+
+        <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">
+          <SubjectGrowth points={subjectInRange} termLabel={chartTermLabel} />
+        </Section>
+      </ControlGroup>
+
+      <ControlGroup
+        id="one-term"
+        title="One term"
+        subtitle="These filters apply to both charts in this group"
+        controls={
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+            <div className="w-full max-w-xs">
+              <p className="mb-1 text-sm font-medium">Term</p>
+              <Combobox
+                options={termOptions}
+                value={q.term}
+                onChange={(v) => setQ({ term: v })}
+                placeholder="Select a term"
+                searchPlaceholder="Search terms"
+              />
+            </div>
+            <div className="w-full max-w-xs">
+              <p className="mb-1 text-sm font-medium">Campus</p>
+              <Combobox
+                options={campusFilterOptions}
+                value={q.campus}
+                onChange={(v) => setQ({ campus: v })}
+                clearLabel="All campuses"
+                placeholder="All campuses"
+                searchPlaceholder="Search campuses"
+              />
+            </div>
           </div>
-          <div className="max-w-xs flex-1">
-            <Combobox
-              options={campusFilterOptions}
-              value={hmCampus}
-              onChange={setHmCampus}
-              clearLabel="All campuses"
-              placeholder="All campuses"
-              searchPlaceholder="Search campuses"
-            />
-          </div>
-        </div>
-        <MeetingHeatmap cells={heat} />
-      </Section>
+        }
+      >
+        <Section title="Course demand" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term.">
+          <FillRateLeaderboard rows={rows} />
+        </Section>
+
+        <Section title="When classes meet" description="Number of class meetings by day of week and start time for the selected term.">
+          <MeetingHeatmap cells={heat} />
+        </Section>
+      </ControlGroup>
     </div>
   );
 }

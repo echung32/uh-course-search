@@ -185,6 +185,37 @@ test("page: analytics dashboard renders the chart sections", async ({ page }) =>
   ).toBeVisible({ timeout: 10000 });
 });
 
+test("page: charts are grouped under labelled filter bars", async ({ page }) => {
+  await page.goto("/analytics");
+  const trends = page.getByRole("region", { name: "Trends over time" });
+  const oneTerm = page.getByRole("region", { name: "One term" });
+  await expect(trends.getByText("These filters apply to all 4 charts in this group")).toBeVisible();
+  await expect(oneTerm.getByText("These filters apply to both charts in this group")).toBeVisible();
+  for (const t of ["Course enrollment over time", "University enrollment trend", "Delivery-mode shift", "Subject growth"]) {
+    await expect(trends.getByText(t)).toBeVisible();
+  }
+  for (const t of ["Course demand", "When classes meet"]) {
+    await expect(oneTerm.getByText(t)).toBeVisible();
+  }
+  await expect(trends.getByText("Term range")).toBeVisible();
+  await expect(trends.getByText("This chart").first()).toBeVisible();
+});
+
+test("one-term group defaults to the newest term and writes it to the URL", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page).toHaveURL(/[?&]term=202710/, { timeout: 10000 });
+  const oneTerm = page.getByRole("region", { name: "One term" });
+  // Exactly one term picker in the group drives both charts.
+  await expect(oneTerm.getByRole("combobox").filter({ hasText: /2026|2027/ })).toHaveCount(1);
+});
+
+test("one-term campus from the URL scopes both charts", async ({ page }) => {
+  await page.goto("/analytics?term=202710&campus=" + encodeURIComponent("University of Hawaii at Hilo"));
+  const oneTerm = page.getByRole("region", { name: "One term" });
+  await expect(oneTerm.getByRole("combobox").filter({ hasText: "University of Hawaii at Hilo" })).toHaveCount(1);
+  await expect(oneTerm.getByRole("combobox").filter({ hasText: "All campuses" })).toHaveCount(0);
+});
+
 test("course picker defaults to ICS 101", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
