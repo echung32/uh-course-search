@@ -25,18 +25,16 @@ export interface FacetTrendPoint {
  * Keeps stacked charts (e.g. the 52-college university trend) readable. Points
  * already within `n` distinct values are returned unchanged.
  */
-export function topNByTotal(points: FacetTrendPoint[], n: number): FacetTrendPoint[] {
-  const totals = new Map<string, number>();
-  for (const p of points) {
-    totals.set(p.facetValue, (totals.get(p.facetValue) ?? 0) + p.enrollment);
-  }
-  if (totals.size <= n) return points;
-  const top = new Set(
-    [...totals.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, n)
-      .map(([k]) => k)
-  );
+export function topNByTotal(
+  points: FacetTrendPoint[],
+  n: number,
+  rankBy: FacetTrendPoint[] = points
+): FacetTrendPoint[] {
+  const present = new Set(points.map((p) => p.facetValue));
+  if (present.size <= n) return points;
+  // Rank on `rankBy` (the full, unfiltered series) so which values make the
+  // top N — and hence the bands and colors — don't shift with the term range.
+  const top = new Set(rankKeys(present, rankBy).slice(0, n));
   const out: FacetTrendPoint[] = [];
   const other = new Map<string, { enrollment: number; sections: number }>();
   for (const p of points) {
@@ -55,14 +53,37 @@ export function topNByTotal(points: FacetTrendPoint[], n: number): FacetTrendPoi
   return out;
 }
 
-export function pivotByTerm(points: FacetTrendPoint[]): {
+/**
+ * Order facet values by total enrollment in `rankBy`, largest first (ties by
+ * name); the "Other" catch-all always last. Values missing from `rankBy` rank
+ * as 0.
+ */
+function rankKeys(keys: Iterable<string>, rankBy: FacetTrendPoint[]): string[] {
+  const totals = new Map<string, number>();
+  for (const p of rankBy) {
+    totals.set(p.facetValue, (totals.get(p.facetValue) ?? 0) + p.enrollment);
+  }
+  return [...keys].sort((a, b) => {
+    if (a === "Other" || b === "Other") return a === "Other" ? 1 : -1;
+    return (totals.get(b) ?? 0) - (totals.get(a) ?? 0) || a.localeCompare(b);
+  });
+}
+
+/**
+ * `keys` come out largest-first by total in `rankBy` (default: `points`), and
+ * Recharts stacks the first series at the bottom — so the biggest band sits on
+ * the flat baseline where its trend is easiest to read, smaller ones above, and
+ * "Other" on top. Pass the full, unfiltered series as `rankBy` to keep the
+ * order (and the index-assigned colors) stable as the term range changes.
+ */
+export function pivotByTerm(
+  points: FacetTrendPoint[],
+  rankBy: FacetTrendPoint[] = points
+): {
   rows: Array<Record<string, number | string>>;
   keys: string[];
 } {
-  // "Other" (from topNByTotal) always sorts last so it reads as the catch-all.
-  const keys = [...new Set(points.map((p) => p.facetValue))].sort((a, b) =>
-    a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b)
-  );
+  const keys = rankKeys(new Set(points.map((p) => p.facetValue)), rankBy);
   const byTerm = new Map<string, Record<string, number | string>>();
   for (const p of points) {
     const row = byTerm.get(p.term) ?? { term: p.term };

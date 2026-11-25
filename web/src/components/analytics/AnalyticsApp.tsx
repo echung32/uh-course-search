@@ -471,11 +471,11 @@ function AnalyticsAppInner({
             <Button type="button" size="sm" variant={facet === "campus" ? "default" : "outline"} aria-pressed={facet === "campus"} onClick={() => setFacet("campus")}>By campus</Button>
             <Button type="button" size="sm" variant={facet === "college" ? "default" : "outline"} aria-pressed={facet === "college"} onClick={() => setFacet("college")}>By college</Button>
           </LocalControls>
-          <UniversityTrend points={uniInRange} termLabel={chartTermLabel} />
+          <UniversityTrend points={uniInRange} rankPoints={uni} termLabel={chartTermLabel} />
         </Section>
 
         <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
-          <DeliveryModeShift points={deliveryInRange} termLabel={chartTermLabel} />
+          <DeliveryModeShift points={deliveryInRange} rankPoints={delivery} termLabel={chartTermLabel} />
         </Section>
 
         <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">
