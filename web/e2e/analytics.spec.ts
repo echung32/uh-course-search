@@ -201,12 +201,16 @@ test("page: charts are grouped under labelled filter bars", async ({ page }) => 
   await expect(trends.getByText("This chart").first()).toBeVisible();
 });
 
-test("one-term group defaults to the newest term and writes it to the URL", async ({ page }) => {
+test("one-term group defaults to the newest term and writes it to the URL", async ({ page, request }) => {
+  // The API's own default (newest rollup term). Not hardcoded: the chromium-only
+  // ingest spec adds rollups for a newer fixture term to the shared D1.
+  const { term } = await (await request.get("/api/analytics/fill-rate?limit=1")).json();
+  expect(term).toBeTruthy();
   await page.goto("/analytics");
-  await expect(page).toHaveURL(/[?&]term=202710/, { timeout: 10000 });
+  await expect(page).toHaveURL(new RegExp(`[?&]term=${term}(&|$)`), { timeout: 10000 });
   const oneTerm = page.getByRole("region", { name: "One term" });
-  // Exactly one term picker in the group drives both charts.
-  await expect(oneTerm.getByRole("combobox").filter({ hasText: /2026|2027/ })).toHaveCount(1);
+  // One term + one campus picker drive both charts; the cards have no pickers.
+  await expect(oneTerm.getByRole("combobox")).toHaveCount(2);
 });
 
 test("one-term campus from the URL scopes both charts", async ({ page }) => {
