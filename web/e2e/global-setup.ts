@@ -439,29 +439,17 @@ export default async function globalSetup() {
   // Manoa stays the bigger campus, so "biggest campus" still defaults to Manoa.
   cts.run("202610", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 20, 30, 1, 0, 1);
   cts.run("202710", "ICS", "1110", "ICS 1110", "Intro to CS I", "University of Hawaii at Hilo", 1, 25, 30, 1, 0, 1);
-  // ICS 2110 in 202710 for the leaderboard (higher fill rate: 39/40 vs 70/80).
-  cts.run("202710", "ICS", "2110", "ICS 2110", "Intro to CS II", "University of Hawaii at Manoa", 1, 39, 40, 1, 12, 0);
-  // ARR 999 — an UNCAPPED course (maximum_enrollment=0 → capped_sections=0) with
-  // the term's largest waitlist (30). The waitlist leaderboard must surface it
-  // (it's exactly the high-demand-but-uncapped case the view exists for), while
-  // the fill-rate leaderboard must exclude it (no real fill-rate denominator).
-  cts.run("202710", "ARR", "9990", "ARR 999", "Arranged Study", "University of Hawaii at Manoa", 1, 5, 0, 0, 30, 0);
-  // A Kapiolani-only course (different course, so ICS 1110 stays Kapiolani-less),
-  // so the leaderboard's campus filter returns a campus-distinct ranking.
-  cts.run("202710", "MATH", "1400", "MATH 140", "Precalculus", "Kapiolani Community College", 5, 100, 140, 5, 3, 1);
   // PHYS 170 — ONE logical course (common-course id "PHYS 170") taught at two
   // campuses, stored under campus-encoded course numbers (UH common course
   // numbering: the trailing digit of course_number is the campus). The picker
   // must collapse these to a single "PHYS 170" entry and the trend must sum the
-  // campus variants. Fill rates kept below ICS 2110 (0.975) so the leaderboard's
-  // rank-0 assertion is unaffected.
+  // campus variants.
   cts.run("202610", "PHYS", "1700", "PHYS 170", "General Physics", "University of Hawaii at Manoa", 1, 30, 60, 1, 0, 1);
   cts.run("202610", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 10, 40, 1, 0, 1);
   cts.run("202710", "PHYS", "1700", "PHYS 170", "General Physics", "University of Hawaii at Manoa", 1, 40, 60, 1, 0, 1);
   cts.run("202710", "PHYS", "1703", "PHYS 170", "General Physics", "Hawaii Community College", 1, 12, 40, 1, 0, 1);
   // ICS 101 — the dashboard's default course; spans two campuses across both
-  // terms so the default "all campuses" view sums multiple series. Fill rates
-  // kept below ICS 2110 (0.975) so the leaderboard's rank-0 assertion holds.
+  // terms so the default "all campuses" view sums multiple series.
   cts.run("202610", "ICS", "1010", "ICS 101", "Tools for the Info World", "University of Hawaii at Manoa", 1, 40, 50, 1, 0, 1);
   cts.run("202710", "ICS", "1010", "ICS 101", "Tools for the Info World", "University of Hawaii at Manoa", 1, 45, 50, 1, 0, 1);
   cts.run("202610", "ICS", "1013", "ICS 101", "Tools for the Info World", "Hawaii Community College", 1, 15, 30, 1, 0, 1);
@@ -482,13 +470,6 @@ export default async function globalSetup() {
   tfs.run("202610", "schedule_type", "Lecture", 2, 50, 80, 2, 5);
   tfs.run("202710", "schedule_type", "Lecture", 2, 70, 80, 2, 8);
   tfs.run("202710", "schedule_type", "Online", 1, 39, 40, 1, 12);
-  // Subject facet (the growth-ranking chart). ICS grows 70→109 (+55.7%) while
-  // MATH shrinks 100→40 (-60%) across the two fixture terms; both clear the
-  // MIN_BASE_ENR=20 baseline so they rank.
-  tfs.run("202610", "subject", "ICS", 4, 70, 110, 4, 5);
-  tfs.run("202710", "subject", "ICS", 6, 109, 120, 6, 20);
-  tfs.run("202610", "subject", "MATH", 5, 100, 140, 5, 3);
-  tfs.run("202710", "subject", "MATH", 2, 40, 60, 2, 0);
 
   // Meeting heatmap fixture: ICS-style MWF 09:00 + a TuTh 13:00 at Manoa for
   // term 202710. day_of_week 0=Mon..6=Sun. The heatmap route sums across campus.

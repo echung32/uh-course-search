@@ -6,8 +6,6 @@ import { Button } from "@/components/ui/button";
 import { EnrollmentOverTime, type CourseTrendPoint } from "./EnrollmentOverTime";
 import { UniversityTrend, type FacetTrendPoint } from "./UniversityTrend";
 import { DeliveryModeShift } from "./DeliveryModeShift";
-import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
-import { SubjectGrowth } from "./SubjectGrowth";
 import { MeetingHeatmap, type MeetingHeatCell } from "./MeetingHeatmap";
 import { classifyTerm, defaultSnapshotTerm, stripViewOnly, type Semester } from "./termFilter";
 import { Info } from "lucide-react";
@@ -132,8 +130,8 @@ function AnalyticsAppInner({
       spring: parseAsBoolean.withDefault(true),
       summer: parseAsBoolean.withDefault(false),
       special: parseAsBoolean.withDefault(false),
-      // "Term snapshot" group: drives both single-term charts (Course demand +
-      // When classes meet). Empty term = the default (see snapshotTerm below).
+      // "Term snapshot" group: drives the single-term chart (When classes
+      // meet). Empty term = the default (see snapshotTerm below).
       term: parseAsString.withDefault(""),
       campus: parseAsString.withDefault(""),
     },
@@ -295,7 +293,7 @@ function AnalyticsAppInner({
     [delivery, passesTerm]
   );
 
-  // ── Chart #2: fill-rate leaderboard ──
+  // ── Term snapshot group (term + campus pickers) ──
   const termOptions: ComboboxOption[] = React.useMemo(
     () => terms.map((t) => ({ value: t.code, label: t.description })),
     [terms]
@@ -307,38 +305,11 @@ function AnalyticsAppInner({
   // The "Term snapshot" group's effective term: the URL's, else the newest base
   // rollup term (skipping Extension/Apprenticeship/Accelerated sub-terms, which
   // sort after their semester but cover few courses). Computed from the page's
-  // own rollupTerms, so both charts request one concrete term from their first
+  // own rollupTerms, so the chart requests one concrete term from its first
   // fetch — no term-less fetch whose late response could clobber a user's pick.
   const snapshotTerm = React.useMemo(
     () => q.term || defaultSnapshotTerm(sortedTerms, termLabel),
     [q.term, sortedTerms, termLabel]
-  );
-  const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
-  React.useEffect(() => {
-    let stale = false; // drop a superseded response (fast term/campus switches)
-    const params = new URLSearchParams({ limit: "20" });
-    if (snapshotTerm) params.set("term", snapshotTerm);
-    if (q.campus) params.set("campus", q.campus);
-    fetch(`/api/analytics/fill-rate?${params}`)
-      .then((r) => r.json())
-      .then((d) => { if (!stale) setRows(d.rows ?? []); })
-      .catch(() => { if (!stale) setRows([]); });
-    return () => { stale = true; };
-  }, [snapshotTerm, q.campus]);
-
-  // ── Chart #6: subject growth ranking ──
-  // Shares the dashboard term-range + semester filters: growth is measured
-  // between the earliest and latest term that survive `passesTerm`.
-  const [subjectTrend, setSubjectTrend] = React.useState<FacetTrendPoint[]>([]);
-  React.useEffect(() => {
-    fetch(`/api/analytics/subject-trend`)
-      .then((r) => r.json())
-      .then((d) => setSubjectTrend(d.points ?? []))
-      .catch(() => setSubjectTrend([]));
-  }, []);
-  const subjectInRange = React.useMemo(
-    () => subjectTrend.filter((p) => passesTerm(p.term)),
-    [subjectTrend, passesTerm]
   );
 
   // ── Chart #7: meeting-time heatmap ──
@@ -361,7 +332,7 @@ function AnalyticsAppInner({
       <ControlGroup
         id="trends"
         title="Trends over time"
-        subtitle="These filters apply to all 4 charts in this group"
+        subtitle="These filters apply to all 3 charts in this group"
         controls={
           <>
             <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
@@ -478,16 +449,12 @@ function AnalyticsAppInner({
         <Section title="Delivery-mode shift" description="Share of sections by schedule type over time.">
           <DeliveryModeShift points={deliveryInRange} rankPoints={delivery} termLabel={chartTermLabel} />
         </Section>
-
-        <Section title="Subject growth" description="Subjects with the largest enrollment increase and decrease between the first and last term in the selected range.">
-          <SubjectGrowth points={subjectInRange} termLabel={chartTermLabel} />
-        </Section>
       </ControlGroup>
 
       <ControlGroup
         id="term-snapshot"
         title="Term snapshot"
-        subtitle="These filters apply to both charts in this group"
+        subtitle="These filters apply to the chart in this group"
         controls={
           <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
             <div className="w-full max-w-xs">
@@ -514,10 +481,6 @@ function AnalyticsAppInner({
           </div>
         }
       >
-        <Section title="Course demand" description="Courses ranked by fill rate (enrollment ÷ capacity) for the selected term.">
-          <FillRateLeaderboard rows={rows} />
-        </Section>
-
         <Section title="When classes meet" description="Number of class meetings by day of week and start time for the selected term.">
           <MeetingHeatmap cells={heat} />
         </Section>

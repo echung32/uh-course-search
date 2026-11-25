@@ -9,14 +9,12 @@ import {
   getCourseOptions,
   getCourseTrend,
   getFacetTrend,
-  getFillRateLeaderboard,
   getMeetingHeatmap,
   getMeetingTerms,
   getRollupTerms,
   type CourseOption,
   type CourseTrendPoint,
   type FacetTrendPoint,
-  type LeaderboardRow,
   type MeetingHeatCell,
 } from "@/lib/db/analyticsQueries";
 
@@ -39,26 +37,9 @@ export function fetchCourseTrend(
 }
 
 export function fetchFacetTrend(
-  facet: "campus" | "college" | "schedule_type" | "subject"
+  facet: "campus" | "college" | "schedule_type"
 ): Promise<FacetTrendPoint[]> {
   return getFacetTrend(getAnalyticsDb(), facet);
-}
-
-/** Leaderboard with clamped limit (1..100) and a fixed min-sections floor. */
-export function fetchFillRateLeaderboard(
-  term: string,
-  limit: number,
-  campus?: string
-): Promise<LeaderboardRow[]> {
-  const clamped = Math.max(1, Math.min(100, Math.floor(limit) || 25));
-  const MIN_SECTIONS = 1; // drop nothing by default; >1 would hide small courses
-  return getFillRateLeaderboard(
-    getAnalyticsDb(),
-    term,
-    clamped,
-    MIN_SECTIONS,
-    campus || undefined
-  );
 }
 
 export function fetchMeetingHeatmap(
