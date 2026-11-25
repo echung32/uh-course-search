@@ -49,6 +49,18 @@ async function hasBannerFilterOptions(db: D1Like, term: string): Promise<boolean
   return (row?.n ?? 0) > 0;
 }
 
+/** Keys of the term's existing course rows. */
+async function courseRowKeys(db: D1Like, term: string): Promise<Set<string>> {
+  const { results } = await db
+    .prepare(
+      `SELECT campus_description AS campus, subject, course_number AS courseNumber
+         FROM course WHERE term = ?`
+    )
+    .bind(term)
+    .all<{ campus: string; subject: string; courseNumber: string }>();
+  return new Set(results.map(ck));
+}
+
 export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions): Promise<CaptureResult> {
   const log = opts.log ?? (() => {});
   const { deadline, delayMs } = opts;
@@ -98,12 +110,12 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
     if (gaps.restrictions.length > 0) await fetchRestrictions(db, term, gaps.restrictions, fetchOpts);
     if (gaps.extras.length > 0) await fetchExtras(db, term, gaps.extras, fetchOpts);
 
-    // 6. Prereqs, only for courses that now have a course row: one still
-    //    lacking facts (its facts fetch failed) has no row for the write to hit.
+    // 6. Prereqs, only for courses that have a course row: the prereq write
+    //    is an UPDATE, so a course with no row (its facts fetch failed before
+    //    ever creating one) would cost two calls for nothing.
     if (gaps.prereqs.length > 0 && !past()) {
-      const still = gaps.facts.length > 0 ? (await getTermGaps(db, term)).facts : [];
-      const noRow = new Set(still.map(ck));
-      const courses = gaps.prereqs.filter((k) => !noRow.has(ck(k)));
+      const withRow = await courseRowKeys(db, term);
+      const courses = gaps.prereqs.filter((k) => withRow.has(ck(k)));
       if (courses.length > 0) await fetchCoursePrereqs(db, term, courses, fetchOpts);
     }
 

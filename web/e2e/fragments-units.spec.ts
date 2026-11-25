@@ -1,7 +1,7 @@
 // Node-only unit tests for the per-fragment DB writers and migration 0015.
 import { test, expect } from "@playwright/test";
 import { freshSearchDb, type FreshSearchDb } from "./sqlite-fixture";
-import type { D1Like } from "../src/lib/db/types";
+import type { D1Like, D1PreparedStatement } from "../src/lib/db/types";
 import {
   upsertSectionRestrictions,
   upsertSectionExtras,
@@ -219,6 +219,110 @@ test.describe("fragment fetchers", () => {
     const rows = f.raw.prepare("SELECT prereq_synced_at FROM course WHERE term = ?").all(FRAG_TERM) as Array<{ prereq_synced_at: number | null }>;
     expect(rows).toHaveLength(keys.length);
     for (const row of rows) expect(row.prereq_synced_at).not.toBeNull();
+  });
+
+  // Two active, synced terms on the same mock catalog: FRAG_TERM (newer, so
+  // selected first) and OTHER_TERM. Neither has any details yet.
+  const OTHER_TERM = "202710";
+  async function twoSyncedTerms() {
+    const t = f.raw.prepare(
+      "INSERT INTO term (code, description, is_view_only, display_order, last_synced_at) VALUES (?, ?, 0, ?, 1)"
+    );
+    t.run(FRAG_TERM, "Spring", 1);
+    t.run(OTHER_TERM, "Fall", 2);
+    expect((await syncTerm(f.db, OTHER_TERM, { subjectDelayMs: 0 })).status).toBe("ok");
+  }
+
+  test("capture skips a straggler term and moves on to the next", async () => {
+    const bf = await import("../src/lib/ingest/backfill");
+    await twoSyncedTerms();
+    // One CRN's restrictions fail permanently (in both terms).
+    await post("/__mock/fail?endpoint=getRestrictions&crn=10003");
+
+    const first = await bf.backfillNextTerm(f.db, { term: FRAG_TERM, delayMs: 0, maxMinutes: 30 });
+    expect(first.capture).toMatchObject({ term: FRAG_TERM, gapsAfter: 1, status: "partial", stoppedEarly: false });
+    expect(first.capture!.progress).toBeGreaterThan(0);
+
+    // It made progress, but what's left is a straggler: not selected again.
+    const dry = await bf.backfillNextTerm(f.db, { dryRun: true });
+    expect(dry.terms!.map((t) => t.code)).toEqual([OTHER_TERM]);
+
+    // The next invocation goes straight to the other term instead of re-running
+    // FRAG_TERM for zero progress.
+    const next = await bf.backfillNextTerm(f.db, { delayMs: 0, maxMinutes: 30 });
+    expect(next.term).toBe(OTHER_TERM);
+    expect(next.captures!.map((c) => c.term)).toEqual([OTHER_TERM]);
+    expect(next.capture).toMatchObject({ term: OTHER_TERM, gapsAfter: 1, status: "partial" });
+    expect(next.capture!.progress).toBeGreaterThan(0);
+
+    const done = await bf.backfillNextTerm(f.db, { dryRun: true });
+    expect(done).toMatchObject({ term: null, done: true, remaining: 0, terms: [] });
+  });
+
+  test("a term whose capture throws is passed over; a forced one propagates", async () => {
+    const bf = await import("../src/lib/ingest/backfill");
+    await twoSyncedTerms();
+    // FRAG_TERM's course-facts query throws (after its capture run started).
+    const throwing: D1Like = {
+      prepare: (sql) => {
+        const stmt = f.db.prepare(sql);
+        if (!sql.includes("c.facts_synced_at AS factsAt")) return stmt;
+        const wrapped: D1PreparedStatement = {
+          bind: (...v: unknown[]) => {
+            if (v.includes(FRAG_TERM)) throw new Error("boom: facts");
+            return stmt.bind(...v);
+          },
+          first: <T,>(c?: string) => stmt.first<T>(c),
+          all: <T,>() => stmt.all<T>(),
+          run: () => stmt.run(),
+        };
+        return wrapped;
+      },
+      batch: (stmts) => f.db.batch(stmts),
+    };
+
+    const r = await bf.backfillNextTerm(throwing, { delayMs: 0, maxMinutes: 30 });
+    expect(r.term).toBe(FRAG_TERM);
+    expect(r.capture).toBeUndefined();
+    expect(r.captures!.map((c) => c.term)).toEqual([OTHER_TERM]);
+    expect(r.captures![0].status).toBe("ok");
+    const run = f.raw
+      .prepare("SELECT status, error_message FROM sync_run WHERE term = ? AND kind = 'capture'")
+      .all(FRAG_TERM) as Array<{ status: string; error_message: string }>;
+    expect(run).toEqual([{ status: "error", error_message: "boom: facts" }]);
+
+    await expect(bf.backfillNextTerm(throwing, { term: FRAG_TERM, delayMs: 0, maxMinutes: 30 })).rejects.toThrow(
+      "boom: facts"
+    );
+  });
+
+  test("capture fetches prereqs for a course whose row exists but whose facts failed", async () => {
+    const { captureTerm } = await import("../src/lib/ingest/capture");
+    const key = f.raw
+      .prepare(
+        `SELECT IFNULL(campus_description, '') AS campus, subject, course_number AS cn, MIN(crn) AS crn
+           FROM course_section WHERE term = ? AND subject = 'ICS' AND course_number = '141' GROUP BY 1, 2, 3`
+      )
+      .get(FRAG_TERM) as { campus: string; subject: string; cn: string; crn: string };
+    // A course row with no facts stamp (e.g. left by an earlier partial write)...
+    f.raw
+      .prepare("INSERT INTO course (term, campus_description, subject, course_number, synced_at) VALUES (?, ?, ?, ?, 1)")
+      .run(FRAG_TERM, key.campus, key.subject, key.cn);
+    // ...whose facts fetch fails this run.
+    await post(`/__mock/fail?endpoint=getSectionCatalogDetails&crn=${key.crn}`);
+
+    const c = await captureTerm(f.db, FRAG_TERM, { deadline: Date.now() + 60_000, delayMs: 0 });
+    expect(c.status).toBe("partial");
+    const row = f.raw
+      .prepare(
+        `SELECT facts_synced_at AS facts, prereq_synced_at AS prereq FROM course
+          WHERE term = ? AND campus_description = ? AND subject = ? AND course_number = ?`
+      )
+      .get(FRAG_TERM, key.campus, key.subject, key.cn) as { facts: number | null; prereq: number | null };
+    expect(row.facts).toBeNull();
+    expect(row.prereq).not.toBeNull();
+    // Only that course's facts gap is left.
+    expect(c.gapsAfter).toBe(1);
   });
 
   test("deadline stops the loop", async () => {

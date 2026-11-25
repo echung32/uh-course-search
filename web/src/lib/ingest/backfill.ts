@@ -6,9 +6,11 @@
  * Time-boxed and resumable: an invocation captures term after term until its
  * deadline (`--maxMinutes`, default 180, and never past 21:45 HST when started
  * before it, keeping clear of the 22:00 daily job). Whatever is left is picked
- * up by the next invocation. A term on which a capture makes zero progress is
- * skipped by later selections (see `listTermsWithGaps`); a forced `term` runs
- * regardless and only that term.
+ * up by the next invocation. A term whose last capture finished with the gaps it
+ * still has (stragglers) is skipped by later selections (see
+ * `listTermsWithGaps`); a term whose capture throws is logged and passed over.
+ * Three terms in a row with no progress (or a throw) end the invocation. A
+ * forced `term` runs regardless, only that term, and its errors propagate.
  */
 import type { D1Like } from "@/lib/db/types";
 import { listTermsWithGaps } from "@/lib/db/queries";
@@ -19,7 +21,7 @@ const MINUTE_MS = 60_000;
 const HST_OFFSET_MS = 10 * 60 * MINUTE_MS; // Pacific/Honolulu = UTC−10, no DST
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const CUTOFF_MS = (21 * 60 + 45) * MINUTE_MS; // 21:45 local
-/** Consecutive zero-progress captures that end an invocation (likely a Banner outage). */
+/** Consecutive zero-progress (or failed) captures that end an invocation (likely a Banner outage). */
 const MAX_ZERO_PROGRESS_RUN = 3;
 
 /**
@@ -54,9 +56,9 @@ export interface BackfillResult {
   remaining: number;
   /** dryRun only: every selectable term with its gap count, in capture order. */
   terms?: Array<{ code: string; isViewOnly: boolean; gaps: number }>;
-  /** The capture of `term` (absent on dryRun or when nothing has gaps). */
+  /** The capture of `term` (absent on dryRun, when nothing has gaps, or when it threw). */
   capture?: CaptureResult;
-  /** Every capture this invocation ran, in order (`capture` is the first). */
+  /** Every capture this invocation completed, in order (failed terms are only logged). */
   captures?: CaptureResult[];
 }
 
@@ -96,10 +98,19 @@ export async function backfillNextTerm(
     let next: string | undefined = first;
     while (next !== undefined && Date.now() < deadline) {
       tried.add(next);
-      const c = await captureTerm(db, next, captureOpts);
-      captures.push(c);
-      if (c.stoppedEarly) break;
-      zeroRun = c.progress === 0 ? zeroRun + 1 : 0;
+      let progress = 0;
+      try {
+        const c = await captureTerm(db, next, captureOpts);
+        captures.push(c);
+        if (c.stoppedEarly) break;
+        progress = c.progress;
+      } catch (err) {
+        // captureTerm already finished its sync_run as 'error'. Don't let one
+        // term that always throws block every invocation: count it as a
+        // zero-progress term and move on.
+        log(`[capture] ${next} FAILED: ${(err as Error).message} — moving to the next term`);
+      }
+      zeroRun = progress === 0 ? zeroRun + 1 : 0;
       if (zeroRun >= MAX_ZERO_PROGRESS_RUN) {
         log(`[capture] ${zeroRun} terms in a row made no progress — stopping (Banner may be down).`);
         break;
@@ -107,5 +118,5 @@ export async function backfillNextTerm(
       next = (await listTermsWithGaps(db)).find((t) => !tried.has(t.code))?.code;
     }
   }
-  return { term: first, done: false, remaining, capture: captures[0], captures };
+  return { term: first, done: false, remaining, capture: captures.find((c) => c.term === first), captures };
 }

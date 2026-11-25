@@ -496,14 +496,17 @@ export async function getTermGaps(db: D1Like, term: string): Promise<TermGaps> {
 }
 
 /**
- * A zero-progress capture stops a term from being re-selected for this long
- * (unless its gap count changes), so a transient Banner outage can't park a
- * term forever; permanent stragglers are retried about weekly.
+ * A capture that finished (not cut by the deadline) and left gaps behind marks
+ * those gaps as stragglers it couldn't fill (e.g. Banner 500s for a cancelled
+ * CRN). While the term's gap count still equals that run's `gapsAfter`, it is
+ * not re-selected — whatever that run's progress — for this long, so a
+ * transient Banner outage can't park a term forever and stragglers are retried
+ * about weekly. A changed gap count (new sections, an on-view fill) re-queues it.
  */
-export const ZERO_PROGRESS_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+export const STRAGGLER_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** True when the latest capture's notes say it made no progress on exactly these gaps. */
-function zeroProgressSkip(notes: string | null, gaps: number, startedAt: number | null, now: number): boolean {
+/** True when the latest capture's notes say it finished with exactly these gaps left. */
+function stragglerSkip(notes: string | null, gaps: number, startedAt: number | null, now: number): boolean {
   if (!notes) return false;
   let n: unknown;
   try {
@@ -512,21 +515,20 @@ function zeroProgressSkip(notes: string | null, gaps: number, startedAt: number 
     return false;
   }
   if (!n || typeof n !== "object") return false;
-  const o = n as { progress?: unknown; gapsAfter?: unknown; stoppedEarly?: unknown };
+  const o = n as { gapsAfter?: unknown; stoppedEarly?: unknown };
   return (
-    o.progress === 0 &&
     o.gapsAfter === gaps &&
     o.stoppedEarly !== true &&
     startedAt !== null &&
-    now - startedAt < ZERO_PROGRESS_RETRY_MS
+    now - startedAt < STRAGGLER_RETRY_MS
   );
 }
 
 /**
  * Every synced term (sections present, `last_synced_at` set — dynamic page-cache
  * terms are out of scope) that still has gaps, active terms first then newest
- * code. A term whose latest `capture` run made zero progress on the same gap
- * count is left out (see ZERO_PROGRESS_RETRY_MS). Counts are aggregated per
+ * code. A term whose latest `capture` run finished with the same gap count it
+ * has now is left out (see STRAGGLER_RETRY_MS). Counts are aggregated per
  * term in SQL (three statements, one batch) — no per-term round trips.
  */
 export async function listTermsWithGaps(
@@ -572,7 +574,7 @@ export async function listTermsWithGaps(
   }>) {
     if (!sec.has(t.code)) continue; // no sections
     const gaps = (sec.get(t.code) ?? 0) + (crs.get(t.code) ?? 0);
-    if (gaps === 0 || zeroProgressSkip(t.notes, gaps, t.startedAt, now)) continue;
+    if (gaps === 0 || stragglerSkip(t.notes, gaps, t.startedAt, now)) continue;
     out.push({ code: t.code, isViewOnly: t.isViewOnly === 1, gaps });
   }
   return out;
