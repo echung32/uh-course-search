@@ -1,0 +1,7 @@
+# Local toolchain. Keep node in sync with .node-version (root + web/), which is
+# what Cloudflare Workers Builds reads — it doesn't read mise.toml. 24.22.1 is
+# preinstalled in the Workers Builds image, so builds skip the download.
+# Node 24 still bundles corepack: `corepack enable` provides yarn per
+# package.json "packageManager".
+[tools]
+node = "24.22.1"

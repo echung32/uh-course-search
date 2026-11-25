@@ -5,10 +5,6 @@
     "web"
   ],
   "packageManager": "yarn@4.16.0",
-  "volta": {
-    "node": "24.22.1",
-    "yarn": "4.16.0"
-  },
   "devDependencies": {
     "typescript": "^6.0.3"
   }

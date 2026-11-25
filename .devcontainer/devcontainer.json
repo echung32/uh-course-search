@@ -34,6 +34,6 @@
 		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
 	],
 	"remoteUser": "vscode",
-	"onCreateCommand": "curl https://get.volta.sh | bash",
+	"onCreateCommand": "curl https://mise.run | sh && ~/.local/bin/mise trust && ~/.local/bin/mise install && ~/.local/bin/mise exec -- corepack enable",
 	"postStartCommand": "sudo mkdir -p /home/vscode/.claude && sudo chown -R vscode:vscode /home/vscode/.claude"
 }
