@@ -11,7 +11,11 @@ import { SearchForm, pickDefaultTerm, type SearchFormValues } from "./SearchForm
 import { ResultsTable } from "./ResultsTable";
 import { SectionDialog } from "./SectionDialog";
 import type { CoverageParams } from "./CoverageDialog";
-import { ALL_CAMPUSES, DEFAULT_CAMPUS } from "@/lib/campuses";
+import {
+  ALL_CAMPUSES,
+  DEFAULT_CAMPUS,
+  campusDescriptionForCode,
+} from "@/lib/campuses";
 import type { SearchResultsResponse, TermListItem } from "@/lib/sis/types";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pageSize";
 import { pageSizePref } from "@/lib/devicePrefs";
@@ -318,6 +322,13 @@ function SearchAppInner({ terms }: SearchAppProps) {
       }
     : null;
 
+  // Hide the Campus column when the results are already pinned to one campus.
+  // The read path matches a known campus code exactly on campus_description
+  // (an unknown code or ALL means no filter), so every row would show the same
+  // value. CRN mode ignores the campus filter, so its row may be from any
+  // campus — keep the column there.
+  const campusScoped = !q.crn && campusDescriptionForCode(q.campus) != null;
+
   return (
     <div className="space-y-6">
       <SearchForm
@@ -342,6 +353,7 @@ function SearchAppInner({ terms }: SearchAppProps) {
         onPageChange={handlePageChange}
         onPageSizeChange={handlePageSizeChange}
         onSelectCrn={openDetail}
+        showCampus={!campusScoped}
       />
 
       <SectionDialog

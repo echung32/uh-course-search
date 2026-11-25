@@ -120,22 +120,26 @@ test("subject search returns matching sections", async ({ page }) => {
 
 test("campus filter defaults to UH Manoa and widens to all campuses", async ({ page }) => {
   // Default campus is UH Manoa, so only the 6 Manoa ICS sections show — the
-  // Hilo section is hidden — and the column reflects it.
+  // Hilo section is hidden. With the search pinned to one campus the Campus
+  // column is redundant (every row would read "UHM"), so it's hidden.
   await runSearch(page, "ICS", "");
   expect(await totalSections(page)).toBe(6);
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toHaveCount(0);
   await expect(
-    page.getByRole("cell", { name: "UHM", exact: true }).first()
-  ).toBeVisible();
-  await expect(
-    page.getByRole("cell", { name: "UHH", exact: true })
+    page.getByRole("cell", { name: "UHM", exact: true })
   ).toHaveCount(0);
 
-  // Widen to all campuses → the Hilo section appears (7 total).
+  // Widen to all campuses → the Hilo section appears (7 total) and the Campus
+  // column returns to tell the rows apart.
   await selectCampus(page, "All Campuses");
   await runSearch(page, "ICS", "");
   await expect(page.getByText(/of 7 sections/)).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toBeVisible();
   await expect(
     page.getByRole("cell", { name: "UHH", exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "UHM", exact: true }).first()
   ).toBeVisible();
 });
 
@@ -287,6 +291,9 @@ test("CRN search returns the single matching section", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "10001", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "ICS 111" })).toHaveCount(1);
   await expect(page).toHaveURL(/[?&]crn=10001\b/);
+  // CRN mode ignores the (default Manoa) campus filter, so the row could be
+  // from any campus — the Campus column stays visible.
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toBeVisible();
 
   // A CRN absent from the (backfilled) term yields no rows — no live call.
   await page.getByLabel("CRN").fill("99999");

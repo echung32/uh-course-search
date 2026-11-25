@@ -44,9 +44,13 @@ import {
 import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/pageSize";
 import type { CourseSection, MeetingTime, SearchResultsResponse } from "@/lib/sis/types";
 
-// Total columns including the leading expand toggle — kept in sync with the
-// header / skeleton / empty-state colSpans below.
+// Total columns including the leading expand toggle and the (optional) Campus
+// column — kept in sync with the header / skeleton / empty-state colSpans below.
 const COLUMN_COUNT = 13;
+
+function columnCount(showCampus: boolean): number {
+  return showCampus ? COLUMN_COUNT : COLUMN_COUNT - 1;
+}
 
 interface ResultsTableProps {
   results: SearchResultsResponse | null;
@@ -59,14 +63,21 @@ interface ResultsTableProps {
   onPageSizeChange: (pageMaxSize: number) => void;
   /** Open the detail dialog for a CRN (e.g. a clicked cross-listed CRN). */
   onSelectCrn: (crn: string) => void;
+  /**
+   * Show the Campus column. Off when the search is already scoped to a single
+   * campus — every row would carry the same value, so it's wasted width.
+   */
+  showCampus?: boolean;
 }
 
 function SectionRow({
   section,
   onSelectCrn,
+  showCampus,
 }: {
   section: CourseSection;
   onSelectCrn: (crn: string) => void;
+  showCampus: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = sectionStatus(section);
@@ -108,20 +119,22 @@ function SectionRow({
         </button>
       </TableCell>
       <TableCell className="font-mono font-medium">{section.subjectCourse}</TableCell>
-      <TableCell className="text-sm text-muted-foreground">
-        {section.campusDescription ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="cursor-help underline decoration-dotted underline-offset-2">
-                {abbreviateCampus(section.campusDescription)}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{section.campusDescription}</TooltipContent>
-          </Tooltip>
-        ) : (
-          "—"
-        )}
-      </TableCell>
+      {showCampus && (
+        <TableCell className="text-sm text-muted-foreground">
+          {section.campusDescription ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-help underline decoration-dotted underline-offset-2">
+                  {abbreviateCampus(section.campusDescription)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{section.campusDescription}</TooltipContent>
+            </Tooltip>
+          ) : (
+            "—"
+          )}
+        </TableCell>
+      )}
       <TableCell className="text-center">{section.sequenceNumber}</TableCell>
       <TableCell>
         <span className="text-sm">{section.courseTitle}</span>
@@ -212,7 +225,7 @@ function SectionRow({
     {expanded && (
       <TableRow className="bg-muted/30 hover:bg-muted/30">
         <TableCell
-          colSpan={COLUMN_COUNT}
+          colSpan={columnCount(showCampus)}
           className={cn("px-6 pt-0 align-top border-l-4", STATUS_RAIL[status])}
         >
           <SectionDetails section={section} onSelectCrn={onSelectCrn} />
@@ -223,12 +236,12 @@ function SectionRow({
   );
 }
 
-function SkeletonRows() {
+function SkeletonRows({ columns }: { columns: number }) {
   return (
     <>
       {Array.from({ length: 5 }).map((_, i) => (
         <TableRow key={i}>
-          {Array.from({ length: COLUMN_COUNT }).map((__, j) => (
+          {Array.from({ length: columns }).map((__, j) => (
             <TableCell key={j}>
               <Skeleton className="h-4 w-full" />
             </TableCell>
@@ -247,8 +260,11 @@ export function ResultsTable({
   onPageChange,
   onPageSizeChange,
   onSelectCrn,
+  showCampus = true,
 }: ResultsTableProps) {
   if (!isLoading && !results) return null;
+
+  const columns = columnCount(showCampus);
 
   const totalCount = results?.totalCount ?? 0;
   const pageOffset = results?.pageOffset ?? 0;
@@ -352,7 +368,7 @@ export function ResultsTable({
               <TableHead className="w-8" />
               <TableHead className="w-20">CRN</TableHead>
               <TableHead className="w-24">Course</TableHead>
-              <TableHead>Campus</TableHead>
+              {showCampus && <TableHead>Campus</TableHead>}
               <TableHead className="w-16 text-center">Sec</TableHead>
               <TableHead>Title</TableHead>
               <TableHead className="w-16 text-center">Cr</TableHead>
@@ -366,10 +382,10 @@ export function ResultsTable({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <SkeletonRows />
+              <SkeletonRows columns={columns} />
             ) : results?.data.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={COLUMN_COUNT} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={columns} className="h-24 text-center text-muted-foreground">
                   No course sections match your search.
                 </TableCell>
               </TableRow>
@@ -379,6 +395,7 @@ export function ResultsTable({
                   key={section.courseReferenceNumber}
                   section={section}
                   onSelectCrn={onSelectCrn}
+                  showCampus={showCampus}
                 />
               ))
             )}
