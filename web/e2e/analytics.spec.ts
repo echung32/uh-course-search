@@ -349,8 +349,8 @@ test("the To term dropdown lists the newest term first", async ({ page }) => {
 
 test("nav: header links between Search and Analytics", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Analytics" }).click();
+  await page.getByRole("link", { name: "Analytics", exact: true }).click();
   await expect(page).toHaveURL(/\/analytics$/);
-  await page.getByRole("link", { name: "Search" }).click();
+  await page.getByRole("link", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
 });
