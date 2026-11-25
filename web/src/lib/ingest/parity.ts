@@ -4,14 +4,19 @@
  * Read-only. Calls crseavail regardless of the CRSEAVAIL flag — it is the gate
  * run before enabling it. Units are fetched CRSEAVAIL_DELAY_MS apart.
  *
+ * A unit counts as compared only if its response passes the same unit checks
+ * ingestion applies (checkUnitCourses / checkUnitGrading); one that fails them is
+ * `unitsRejected`, since ingestion would send it to Banner.
+ *
  * Passes only when: at least one unit was compared; at most 5% of the units
- * that have a campus code failed to fetch (`coverage`); the cross-list fetch
- * worked; something was compared; and every compared field matches >= 99%.
+ * that have a campus code failed to fetch or were rejected (`coverage`); the
+ * cross-list fetch worked; at least one course fact (not only a cross-list) was
+ * compared; and every compared field matches >= 99%.
  */
 import type { D1Like } from "@/lib/db/types";
 import { caCourseDesc, caCourseGrading, caCourses, caCrossList, crseavailDelayMs } from "@/lib/crseavail/client";
 import { buildCourseFacts, crossListMap } from "@/lib/crseavail/map";
-import { campusCodeMap, loadCrnIndex } from "./courseFacts";
+import { campusCodeMap, checkUnitCourses, checkUnitGrading, loadCrnIndex } from "./courseFacts";
 
 export type ParityField =
   | "gradingModes"
@@ -35,6 +40,8 @@ export interface ParityCoverage {
   unitsOk: number;
   /** Units whose crseavail fetch failed; skipped. */
   unitsFailed: number;
+  /** Units whose response failed the ingestion unit checks (empty/count/crn-match); skipped. */
+  unitsRejected: number;
   /** Units whose campus has no crseavail code (never fetched); skipped. */
   unitsUnmapped: number;
 }
@@ -48,7 +55,8 @@ export interface ParityReport {
   pass: boolean;
 }
 
-const FIELDS: ParityField[] = ["gradingModes", "creditHours", "collegeCode", "departmentCode", "description", "crossList"];
+const FACT_FIELDS: ParityField[] = ["gradingModes", "creditHours", "collegeCode", "departmentCode", "description"];
+const FIELDS: ParityField[] = [...FACT_FIELDS, "crossList"];
 const MAX_EXAMPLES = 5;
 const PASS_RATE = 0.99;
 /** Max share of fetchable (mapped) units whose crseavail fetch may fail. */
@@ -100,8 +108,10 @@ export async function crseavailParity(
       description: string | null;
     }>();
   const stored = new Map(results.map((r) => [`${r.campus}|${r.subject}|${r.cn}`, r]));
+  const heldUnits = new Set(results.map((r) => `${r.campus}|${r.subject}`));
 
   let unitsFailed = 0;
+  let unitsRejected = 0;
   let unitsOk = 0;
   let unitsUnmapped = 0;
   const delay = crseavailDelayMs();
@@ -121,6 +131,13 @@ export async function crseavailParity(
     let built;
     try {
       const [courses, descs, grading] = await Promise.all([caCourses(ca), caCourseDesc(ca), caCourseGrading(ca)]);
+      const bad =
+        checkUnitCourses(courses, perUnit.get(u) ?? 0, heldUnits.has(u), index) ?? checkUnitGrading(courses, grading);
+      if (bad) {
+        log(`[${term}] parity ${campus} ${subject}: rejected by the unit checks (${bad}), skipped`);
+        unitsRejected += 1;
+        continue;
+      }
       built = buildCourseFacts({ courses, descs, grading }, index);
     } catch (err) {
       log(`[${term}] parity ${campus} ${subject}: crseavail failed, skipped: ${(err as Error).message}`);
@@ -166,19 +183,19 @@ export async function crseavailParity(
   }
 
   for (const f of FIELDS) fields[f].rate = fields[f].compared ? fields[f].equal / fields[f].compared : 1;
-  const anyCompared = FIELDS.some((f) => fields[f].compared > 0);
-  const coverage: ParityCoverage = { units: perUnit.size, unitsOk, unitsFailed, unitsUnmapped };
+  const factsCompared = FACT_FIELDS.some((f) => fields[f].compared > 0);
+  const coverage: ParityCoverage = { units: perUnit.size, unitsOk, unitsFailed, unitsRejected, unitsUnmapped };
   const mapped = coverage.units - unitsUnmapped;
   log(
     `[${term}] parity coverage: ${unitsOk}/${coverage.units} units compared, ` +
-      `${unitsFailed} failed, ${unitsUnmapped} unmapped`
+      `${unitsFailed} failed, ${unitsRejected} rejected, ${unitsUnmapped} unmapped`
   );
   const pass =
     unitsOk > 0 &&
     mapped > 0 &&
-    unitsFailed / mapped <= MAX_UNIT_FAILURE &&
+    (unitsFailed + unitsRejected) / mapped <= MAX_UNIT_FAILURE &&
     !crossListFailed &&
-    anyCompared &&
+    factsCompared &&
     FIELDS.every((f) => fields[f].compared === 0 || fields[f].rate >= PASS_RATE);
   return { term, fields, coverage, crossListFailed, pass };
 }

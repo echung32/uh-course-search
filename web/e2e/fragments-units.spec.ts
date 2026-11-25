@@ -53,11 +53,13 @@ test("0017 backfills fragment timestamps only for fragments that were fetched", 
   sd.run(TERM, "2", null, "<f/>", null, "<s/>", null); // partial row: extras incomplete
   sd.run(TERM, "3", null, null, null, null, null); // nothing fetched
   const ins = f.raw.prepare(
-    `INSERT INTO course (term, campus_description, subject, course_number, raw_prereq_html, synced_at)
-     VALUES (?, 'C', 'ICS', ?, ?, 222)`
+    `INSERT INTO course (term, campus_description, subject, course_number, raw_prereq_html, raw_coreq_html, synced_at)
+     VALUES (?, 'C', 'ICS', ?, ?, ?, 222)`
   );
-  ins.run(TERM, "111", "<p/>");
-  ins.run(TERM, "222", null);
+  ins.run(TERM, "111", "<p/>", "<c/>"); // both fetched
+  ins.run(TERM, "222", null, null); // never fetched
+  ins.run(TERM, "333", "<p/>", null); // old on-view fetch: coreq request failed
+  ins.run(TERM, "444", "", ""); // two successful empty responses
   f.applyRest();
   const stamps = f.raw
     .prepare("SELECT crn, restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x FROM section_detail ORDER BY crn")
@@ -68,9 +70,9 @@ test("0017 backfills fragment timestamps only for fragments that were fetched", 
     { crn: "3", r: null, e: null, x: null },
   ]);
   const c = f.raw.prepare("SELECT * FROM course ORDER BY course_number").all() as Record<string, unknown>[];
-  expect(c.map((r) => r.facts_synced_at)).toEqual([222, 222]);
-  expect(c.map((r) => r.facts_source)).toEqual(["banner", "banner"]);
-  expect(c.map((r) => r.prereq_synced_at)).toEqual([222, null]);
+  expect(c.map((r) => r.facts_synced_at)).toEqual([222, 222, 222, 222]);
+  expect(c.map((r) => r.facts_source)).toEqual(["banner", "banner", "banner", "banner"]);
+  expect(c.map((r) => r.prereq_synced_at)).toEqual([222, null, null, 222]);
 });
 
 test("upsertCourseFacts keeps stored credits when the incoming creditHours is null", async () => {
@@ -83,6 +85,19 @@ test("upsertCourseFacts keeps stored credits when the incoming creditHours is nu
   // A real value still replaces it.
   await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { creditHours: 3 } }, "crseavail", 30);
   expect(credit()).toEqual({ creditHours: 3 });
+});
+
+test("upsertCourseFacts: a Banner creditHours-only breakdown keeps crseavail's range and hours", async () => {
+  f = freshSearchDb();
+  const credit = () =>
+    JSON.parse((f.raw.prepare("SELECT credit_breakdown FROM course").get() as { credit_breakdown: string }).credit_breakdown);
+  const ca = { creditHours: 1, creditHrLow: 1, creditHrHigh: 6, lecHrLow: 1, labHrLow: null, billHrLow: 1 };
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: ca }, "crseavail", 10);
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { creditHours: 2 } }, "banner", 20);
+  expect(credit()).toEqual({ creditHours: 2, creditHrLow: 1, creditHrHigh: 6, lecHrLow: 1, labHrLow: null, billHrLow: 1 });
+  // A null incoming key never deletes a stored one.
+  await upsertCourseFacts(f.db, key, { ...facts, creditBreakdown: { ...ca, creditHrHigh: null } }, "crseavail", 30);
+  expect(credit().creditHrHigh).toBe(6);
 });
 
 test("upsertSectionRestrictions leaves other fragments untouched", async () => {

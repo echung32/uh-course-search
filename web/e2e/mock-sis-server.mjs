@@ -287,7 +287,12 @@ function handleCrseavail(req, res, url) {
   const endpoint = url.pathname.slice(CRSEAVAIL_BASE.length + 1);
   const rows = caRows(endpoint, url.searchParams);
   if (rows === null) return sendJson(res, 404, { status: 404, error: "Not Found" });
-  const scoped = crseavailModeSubject !== null && url.searchParams.get("subjectCode") !== crseavailModeSubject;
+  // subject "*" = every per-unit endpoint (those carry subjectCode), leaving the term-wide crosslist alone.
+  const scoped =
+    crseavailModeSubject !== null &&
+    (crseavailModeSubject === "*"
+      ? !url.searchParams.has("subjectCode")
+      : url.searchParams.get("subjectCode") !== crseavailModeSubject);
   switch (scoped ? "ok" : crseavailMode) {
     case "empty":
       return sendJson(res, 200, []);

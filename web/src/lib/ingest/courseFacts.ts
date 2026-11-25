@@ -87,6 +87,18 @@ export interface CourseFactsOptions {
   /** Epoch ms; stop starting new work once past it. */
   deadline?: number;
   log?: (m: string) => void;
+  /** Shared across the terms of one invocation: once tripped, crseavail stays off for the rest of it. */
+  runBreaker?: RunBreaker;
+}
+
+/**
+ * Run-wide crseavail health (spec §3.2 "Banner-only for the rest of the run"):
+ * one object per invocation, handed to every syncCourseFacts / syncCrossList of
+ * every term, so a trip in one term keeps the later ones (and their cross-list
+ * write) off crseavail too.
+ */
+export interface RunBreaker {
+  tripped: boolean;
 }
 
 interface TermCourse {
@@ -332,6 +344,30 @@ export interface BreakerState {
  * rejections trip, and an accepted unit resets the run. Unmapped units
  * (`no-campus-code`) were never attempted and leave the state unchanged.
  */
+/**
+ * The per-unit checks on a crseavail `courses` response, shared by ingestion
+ * and the parity gate: `null` = accepted. `sections` = our section count for the
+ * unit; `held` = we already store facts for one of its courses.
+ */
+export function checkUnitCourses(
+  courses: Array<{ ssbsectCrn1: string }>,
+  sections: number,
+  held: boolean,
+  index: CrnIndex
+): Rejection | null {
+  if (courses.length === 0 && held) return "empty";
+  if (courses.length < MIN_COUNT_RATIO * sections) return "count";
+  const crns = new Set(courses.map((r) => r.ssbsectCrn1));
+  const known = [...crns].filter((c) => index.has(c)).length;
+  if (crns.size > 0 && known < MIN_CRN_MATCH * crns.size) return "crn-match";
+  return null;
+}
+
+/** Every section has a grading mode, so an empty list for a non-empty unit is a bad response. */
+export function checkUnitGrading(courses: unknown[], grading: unknown[]): Rejection | null {
+  return courses.length > 0 && grading.length === 0 ? "empty" : null;
+}
+
 export function breakerStep(s: BreakerState, outcome: "accepted" | "rejected" | "unmapped"): BreakerState {
   if (s.tripped || outcome === "unmapped") return s;
   if (outcome === "accepted") return { attempted: s.attempted + 1, consecutive: 0, tripped: false };
@@ -386,7 +422,13 @@ export async function syncCourseFacts(
       if (!names.has(k)) names.set(k, lookupNames(db, term, campus, coll, dept, crn, nameSession, log));
       return names.get(k)!;
     };
-    let breaker: BreakerState = { attempted: 0, consecutive: 0, tripped: false };
+    // A trip earlier in this invocation (another term) keeps crseavail off here too.
+    const runTripped = opts.runBreaker?.tripped ?? false;
+    let breaker: BreakerState = { attempted: 0, consecutive: 0, tripped: runTripped };
+    if (runTripped) {
+      result.breakerTripped = true;
+      log(`[${term}] course facts: breaker tripped earlier in this run; Banner-only`);
+    }
     const delay = crseavailDelayMs();
     let fetched = 0; // units that called crseavail so far (the delay goes between them)
 
@@ -422,6 +464,7 @@ export async function syncCourseFacts(
       breaker = breakerStep(breaker, typeof r === "string" ? "rejected" : "accepted");
       if (breaker.tripped) {
         result.breakerTripped = true;
+        if (opts.runBreaker) opts.runBreaker.tripped = true;
         log(`[${term}] course facts: breaker tripped after ${unitName} (${r}); Banner-only for the rest of the run`);
       }
     }
@@ -484,15 +527,12 @@ async function fetchAndApplyUnit(
   try {
     const courses = await call("courses", caCourses);
     const held = u.courses.some((c) => c.factsAt !== null);
-    if (courses.length === 0 && held) return "empty";
-    if (courses.length < MIN_COUNT_RATIO * u.sections) return "count";
-    const crns = new Set(courses.map((r) => r.ssbsectCrn1));
-    const known = [...crns].filter((c) => index.has(c)).length;
-    if (crns.size > 0 && known < MIN_CRN_MATCH * crns.size) return "crn-match";
+    const bad = checkUnitCourses(courses, u.sections, held, index);
+    if (bad) return bad;
     const descs = await call("course-desc", caCourseDesc);
     const grading = await call("course-grading", caCourseGrading);
-    // Every section has a grading mode; an empty list would erase stored ones.
-    if (courses.length > 0 && grading.length === 0) return "empty";
+    const badGrading = checkUnitGrading(courses, grading);
+    if (badGrading) return badGrading;
 
     const built = buildCourseFacts({ courses, descs, grading }, index);
     const { results: secs } = await db

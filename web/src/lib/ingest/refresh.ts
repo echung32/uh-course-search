@@ -19,7 +19,7 @@ import type { D1Like } from "@/lib/db/types";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { syncTerm } from "@/lib/ingest/sync";
 import { materializeCatalogFacets } from "@/lib/ingest/details";
-import { syncCourseFacts, notesFromFacts, type CourseFactsResult } from "@/lib/ingest/courseFacts";
+import { syncCourseFacts, notesFromFacts, type CourseFactsResult, type RunBreaker } from "@/lib/ingest/courseFacts";
 import { syncCrossList } from "@/lib/ingest/crossList";
 import { fetchCoursePrereqs, fetchExtras, fetchRestrictions } from "@/lib/ingest/fragments";
 import { crseavailEnabled } from "@/lib/crseavail/client";
@@ -64,6 +64,8 @@ export interface RefreshOptions {
   subjectDelayMs?: number;
   courseDelayMs?: number;
   log?: (msg: string) => void;
+  /** Shared crseavail breaker; refreshMutableTerms makes one per invocation. */
+  runBreaker?: RunBreaker;
 }
 
 export interface TermRefreshSummary {
@@ -154,6 +156,8 @@ async function coursesOfCrns(
 export interface DetailRefreshOptions {
   courseDelayMs?: number;
   log?: (msg: string) => void;
+  /** Shared crseavail breaker across terms; a fresh one per call when absent. */
+  runBreaker?: RunBreaker;
 }
 
 /**
@@ -199,6 +203,7 @@ export async function refreshTermDetails(
   const log = options.log ?? (() => {});
   const fetchOpts = { delayMs: options.courseDelayMs ?? 0, log };
   const caps = rollingCaps();
+  const runBreaker = options.runBreaker ?? { tripped: false };
 
   const out: DetailRefreshResult = {
     detailFetchedCrns: [],
@@ -238,6 +243,7 @@ export async function refreshTermDetails(
       mode: "all",
       bannerCap: caps.facts,
       bannerExtra: b1Courses,
+      runBreaker,
       ...fetchOpts,
     });
     failures += out.facts.bannerFailed ?? 0;
@@ -266,7 +272,8 @@ export async function refreshTermDetails(
     }
 
     // 7. Cross-list: term-wide crseavail, else Banner for B1 ∪ rolling extras.
-    const x = await syncCrossList(db, term, { fallbackCrns: dedupe([...b1, ...rollE]), ...fetchOpts });
+    // A facts breaker trip keeps this off crseavail too (runBreaker).
+    const x = await syncCrossList(db, term, { fallbackCrns: dedupe([...b1, ...rollE]), runBreaker, ...fetchOpts });
     out.crossList = x.source;
     failures += x.failed;
 
@@ -328,6 +335,7 @@ export async function refreshTerm(
   const d = await refreshTermDetails(db, term, diff, {
     courseDelayMs: options.courseDelayMs,
     log,
+    runBreaker: options.runBreaker,
   });
   log(
     `[refresh] ${term}: sync ${sync.status} (+${diff.newCrns.length} -${diff.droppedCrns.length} ` +
@@ -368,8 +376,11 @@ export async function refreshMutableTerms(
   const codes = await mutableTermCodes(db, options.terms);
   log(`[refresh] ${codes.length} mutable terms: ${codes.join(", ")}`);
   const terms: TermRefreshSummary[] = [];
+  // One crseavail breaker for the whole invocation (spec §3.2: a trip means
+  // Banner-only for the rest of the run, later terms included).
+  const runBreaker = options.runBreaker ?? { tripped: false };
   for (const code of codes) {
-    terms.push(await refreshTerm(db, code, options));
+    terms.push(await refreshTerm(db, code, { ...options, runBreaker }));
   }
   return { terms };
 }

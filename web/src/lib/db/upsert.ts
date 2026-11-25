@@ -508,10 +508,14 @@ export async function upsertCourseFacts(
          schedule_types = CASE WHEN excluded.schedule_types = '[]'
            THEN COALESCE(course.schedule_types, '[]') ELSE excluded.schedule_types END,
          -- Unknown incoming credits (e.g. crseavail omitted creditHrLow) never
-         -- erase stored ones.
+         -- erase stored ones. Known ones are merged key by key (the last bound
+         -- value: the incoming breakdown without its null keys), so Banner's
+         -- creditHours-only breakdown keeps crseavail's range and hours.
          credit_breakdown = CASE
            WHEN json_extract(excluded.credit_breakdown, '$.creditHours') IS NULL
            THEN COALESCE(course.credit_breakdown, excluded.credit_breakdown)
+           WHEN json_valid(course.credit_breakdown)
+           THEN json_patch(course.credit_breakdown, ?)
            ELSE excluded.credit_breakdown END,
          description = COALESCE(excluded.description, course.description),
          facts_synced_at = excluded.facts_synced_at,
@@ -533,7 +537,9 @@ export async function upsertCourseFacts(
       f.description,
       at,
       source,
-      at
+      at,
+      // json_patch deletes a key whose patch value is null, so drop the nulls.
+      JSON.stringify(Object.fromEntries(Object.entries(f.creditBreakdown).filter(([, v]) => v !== null)))
     )
     .run();
 }

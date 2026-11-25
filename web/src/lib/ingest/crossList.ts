@@ -9,6 +9,7 @@ import { caCrossList, crseavailEnabled, CrseavailError } from "@/lib/crseavail/c
 import { crossListMap } from "@/lib/crseavail/map";
 import { logCa } from "@/lib/log";
 import { bannerCrossList } from "./fragments";
+import type { RunBreaker } from "./courseFacts";
 
 const MIN_XLIST_RATIO = 0.5; // cross-listed term CRNs vs those we hold
 const pastDeadline = (d?: number) => d !== undefined && Date.now() > d;
@@ -18,17 +19,27 @@ const pastDeadline = (d?: number) => d !== undefined && Date.now() > d;
  * many term CRNs as we hold cross-listed is authoritative for EVERY term CRN
  * (CRNs in no group become NULL — the one guarded crseavail null, spec §3.3).
  * Otherwise Banner `getCrossListSections` runs for `fallbackCrns` only.
+ * A tripped `runBreaker` (crseavail judged unhealthy earlier in this run) skips
+ * crseavail entirely, so the term-wide write never follows a trip.
  * `failed` counts Banner fallback CRNs that could not be fetched.
  */
 export async function syncCrossList(
   db: D1Like,
   term: string,
-  opts: { fallbackCrns: string[]; delayMs?: number; deadline?: number; log?: (m: string) => void }
+  opts: {
+    fallbackCrns: string[];
+    delayMs?: number;
+    deadline?: number;
+    log?: (m: string) => void;
+    runBreaker?: RunBreaker;
+  }
 ): Promise<{ source: "crseavail" | "banner" | "skipped"; written: number; failed: number }> {
   const log = opts.log ?? (() => {});
   if (pastDeadline(opts.deadline)) return { source: "skipped", written: 0, failed: 0 };
 
-  if (crseavailEnabled()) {
+  if (crseavailEnabled() && opts.runBreaker?.tripped) {
+    log(`[${term}] cross-list: breaker tripped earlier in this run → Banner for ${opts.fallbackCrns.length} CRNs`);
+  } else if (crseavailEnabled()) {
     let reason: string | null = null;
     try {
       const rows = await caCrossList(term).catch((err) => {

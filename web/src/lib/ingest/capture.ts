@@ -13,7 +13,7 @@ import type { D1Like } from "@/lib/db/types";
 import { gapCount, getTermGaps } from "@/lib/db/queries";
 import { finishSyncRun, startSyncRun } from "@/lib/db/upsert";
 import { FILTER_KINDS, materializeCatalogFacets, syncFilterOptions } from "./details";
-import { syncCourseFacts, type CourseFactsResult } from "./courseFacts";
+import { syncCourseFacts, type CourseFactsResult, type RunBreaker } from "./courseFacts";
 import { syncCrossList } from "./crossList";
 import { fetchCoursePrereqs, fetchExtras, fetchRestrictions } from "./fragments";
 
@@ -33,6 +33,8 @@ export interface CaptureOptions {
   deadline: number;
   delayMs?: number;
   log?: (m: string) => void;
+  /** Shared crseavail breaker; backfillNextTerm makes one per invocation. */
+  runBreaker?: RunBreaker;
 }
 
 const ck = (k: { campus: string; subject: string; courseNumber: string }) =>
@@ -66,6 +68,7 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
   const { deadline, delayMs } = opts;
   const past = () => Date.now() > deadline;
   const fetchOpts = { delayMs, deadline, log };
+  const runBreaker = opts.runBreaker ?? { tripped: false };
 
   const gaps = await getTermGaps(db, term);
   const gapsBefore = gapCount(gaps);
@@ -77,7 +80,11 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
   const run = await startSyncRun(db, term, "capture", Date.now());
 
   // Reported as-is when no facts gap needed crseavail this run.
-  let crseavail: CourseFactsResult["source"] = crseavailEnabled() ? "crseavail" : "off";
+  let crseavail: CourseFactsResult["source"] = !crseavailEnabled()
+    ? "off"
+    : runBreaker.tripped
+      ? "degraded"
+      : "crseavail";
   let unitsFallback = 0;
   let crosslist = "skipped";
   let gapsAfter = gapsBefore;
@@ -97,7 +104,7 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
 
     // 2. Course facts (crseavail first, Banner fallback), then the menus they feed.
     if (gaps.facts.length > 0) {
-      const facts = await syncCourseFacts(db, term, { mode: "gaps", delayMs, deadline, log });
+      const facts = await syncCourseFacts(db, term, { mode: "gaps", delayMs, deadline, log, runBreaker });
       crseavail = facts.source;
       unitsFallback = facts.unitsFallback;
       await materializeCatalogFacets(db, term, log);
@@ -105,7 +112,7 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
 
     // 3–5. Per-CRN fragments.
     if (gaps.crosslist.length > 0) {
-      crosslist = (await syncCrossList(db, term, { fallbackCrns: gaps.crosslist, ...fetchOpts })).source;
+      crosslist = (await syncCrossList(db, term, { fallbackCrns: gaps.crosslist, runBreaker, ...fetchOpts })).source;
     }
     if (gaps.restrictions.length > 0) await fetchRestrictions(db, term, gaps.restrictions, fetchOpts);
     if (gaps.extras.length > 0) await fetchExtras(db, term, gaps.extras, fetchOpts);

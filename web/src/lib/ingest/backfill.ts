@@ -106,7 +106,8 @@ export async function backfillNextTerm(
         `nightly refresh — pass a small --maxMinutes`
     );
   }
-  const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log };
+  // One crseavail breaker across every term of this invocation (spec §3.2).
+  const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log, runBreaker: { tripped: false } };
 
   const captures: CaptureResult[] = [];
   if (options.term) {

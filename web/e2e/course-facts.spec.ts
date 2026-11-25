@@ -296,7 +296,7 @@ test("parity passes when crseavail matches stored Banner values", async () => {
   const d = await syncDetails(f.db, TERM, { courseDelayMs: 0 });
   expect(d.status).not.toBe("error");
   const r = await crseavailParity(f.db, TERM);
-  expect(r.coverage).toEqual({ units: 2, unitsOk: 2, unitsFailed: 0, unitsUnmapped: 0 });
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 2, unitsFailed: 0, unitsRejected: 0, unitsUnmapped: 0 });
   expect(r.pass).toBe(true);
   for (const field of Object.values(r.fields)) {
     if (field.compared > 0) expect(field.rate).toBe(1);
@@ -348,7 +348,7 @@ test("parity fails when crseavail is down: every unit failed and cross-list fail
   ).n;
   const r = await crseavailParity(f.db, TERM);
   expect(units).toBeGreaterThan(0);
-  expect(r.coverage).toEqual({ units, unitsOk: 0, unitsFailed: units, unitsUnmapped: 0 });
+  expect(r.coverage).toEqual({ units, unitsOk: 0, unitsFailed: units, unitsRejected: 0, unitsUnmapped: 0 });
   expect(r.crossListFailed).toBe(true);
   expect(r.fields.crossList.compared).toBe(0);
   expect(r.pass).toBe(false);
@@ -361,13 +361,51 @@ test("parity fails when too many units fail, even though the rest match", async 
   await syncDetails(f.db, TERM, { courseDelayMs: 0 });
   await setMode("html", "MATH"); // only the MATH unit's crseavail calls fail
   const r = await crseavailParity(f.db, TERM);
-  expect(r.coverage).toEqual({ units: 2, unitsOk: 1, unitsFailed: 1, unitsUnmapped: 0 });
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 1, unitsFailed: 1, unitsRejected: 0, unitsUnmapped: 0 });
   expect(r.crossListFailed).toBe(false);
   for (const field of Object.values(r.fields)) {
     if (field.compared > 0) expect(field.rate).toBe(1);
   }
   expect(r.fields.description.compared).toBeGreaterThan(0);
   expect(r.pass).toBe(false); // 1/2 units failed > 5%
+});
+
+test("parity fails when every unit is empty, even if the cross-lists match", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  await setMode("empty", "*"); // every unit returns 200 [] (as bad params do); crosslist stays valid
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 0, unitsFailed: 0, unitsRejected: 2, unitsUnmapped: 0 });
+  expect(r.crossListFailed).toBe(false);
+  expect(r.fields.crossList.compared).toBeGreaterThan(0);
+  for (const field of ["gradingModes", "creditHours", "collegeCode", "departmentCode", "description"] as const) {
+    expect(r.fields[field].compared).toBe(0);
+  }
+  expect(r.pass).toBe(false);
+});
+
+test("a breaker tripped earlier in the run sends a later term's facts and cross-list straight to Banner", async () => {
+  const runBreaker = { tripped: false };
+  await setMode("html");
+  const first = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0, runBreaker });
+  expect(first.breakerTripped).toBe(true);
+  expect(runBreaker.tripped).toBe(true);
+  // crseavail healthy again, but the run already judged it unhealthy.
+  await mockPost("/__mock/reset");
+  f.raw.prepare("UPDATE course SET facts_synced_at = NULL WHERE term = ?").run(TERM);
+  const second = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0, runBreaker });
+  expect(second).toMatchObject({ source: "degraded", breakerTripped: true, written: 0 });
+  expect(second.rejections).toEqual({ breaker: 2 });
+  const x = await crossList.syncCrossList(f.db, TERM, { fallbackCrns: ["10001"], delayMs: 0, runBreaker });
+  expect(x.source).toBe("banner");
+  expect(await mockCounts([CA("courses"), CA("course-desc"), CA("course-grading"), CA("crosslist")])).toEqual({
+    [CA("courses")]: 0,
+    [CA("course-desc")]: 0,
+    [CA("course-grading")]: 0,
+    [CA("crosslist")]: 0,
+  });
 });
 
 test("parity counts units with no campus code separately from failures", async () => {
@@ -379,7 +417,7 @@ test("parity counts units with no campus code separately from failures", async (
     .prepare(`UPDATE course_section SET raw_json = json_set(raw_json, '$.meetingsFaculty', json('[]')) WHERE term = ?`)
     .run(TERM);
   const r = await crseavailParity(f.db, TERM);
-  expect(r.coverage).toEqual({ units: 2, unitsOk: 0, unitsFailed: 0, unitsUnmapped: 2 });
+  expect(r.coverage).toEqual({ units: 2, unitsOk: 0, unitsFailed: 0, unitsRejected: 0, unitsUnmapped: 2 });
   expect(r.pass).toBe(false); // nothing compared from crseavail units
 });
 
@@ -493,7 +531,7 @@ test("daily details refresh keeps Banner per-CRN/per-course calls within the cap
       [CA("courses")]: 1, // the preflight unit, rejected → breaker
       [CA("course-desc")]: 0,
       [CA("course-grading")]: 0,
-      [CA("crosslist")]: 1,
+      [CA("crosslist")]: 0, // the tripped breaker keeps the term-wide write off crseavail
       [SSB("getSectionCatalogDetails")]: 3,
       [SSB("getCourseDescription")]: 3,
       [SSB("getXlstSections")]: 4,
