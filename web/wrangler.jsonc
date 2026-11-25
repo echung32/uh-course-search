@@ -32,9 +32,11 @@
       "migrations_dir": "./migrations-analytics"
     }
   ],
-  // Subrequest budget raised to cover Tier A full sync across multiple terms
-  // (default Worker limit is 1000; each term can require ~200-400 subrequests).
-  "limits": { "subrequests": 50000 },
+  // No "limits" block: custom Worker limits (e.g. the old `subrequests: 50000`,
+  // which let RefreshWorkflow run Tier A inside the Worker) are Workers Paid only —
+  // on Free the deploy is rejected ("CPU limits are not supported", code 100328).
+  // The refresh now runs on the home server (`yarn ingest daily`), so the Worker
+  // only needs the default per-request budget (~50 subrequests on Free).
   // RefreshWorkflow binding, kept UNSCHEDULED: the daily refresh now runs on the
   // home server (`yarn ingest daily` from the compose `cron` service at 22:00 HST,
   // see deploy/home/) because Free-plan Workers can't make the hundreds of
