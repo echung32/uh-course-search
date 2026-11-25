@@ -21,6 +21,7 @@ import {
   chunkIndicesFor,
   filterSignature,
   getTermSyncMeta,
+  type TermSyncMeta,
 } from "@/lib/db/queries";
 import type { D1Like } from "@/lib/db/types";
 import type { SearchParams, SisSession } from "@/lib/sis/types";
@@ -117,10 +118,12 @@ async function writeChunk(
  */
 export async function ensureSearchPage(
   db: D1Like,
-  params: SearchParams
+  params: SearchParams,
+  /** The term's sync meta when the caller already read it (saves a round-trip). */
+  knownMeta?: TermSyncMeta | null
 ): Promise<boolean> {
   if (!dynamicEnabled()) return false;
-  const meta = await getTermSyncMeta(db, params.term);
+  const meta = knownMeta !== undefined ? knownMeta : await getTermSyncMeta(db, params.term);
   if (!meta || meta.lastSyncedAt != null) return false; // unknown or backfilled
 
   const indices = chunkIndicesFor(params.pageOffset, params.pageMaxSize);
