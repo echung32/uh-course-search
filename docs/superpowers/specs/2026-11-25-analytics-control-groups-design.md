@@ -51,8 +51,10 @@ in 30..331 and isn't knowable from public data).
   classes meet. No local controls.
 - Local controls sit in a dashed box labelled "This chart".
 - Each chart stays full width, one per row, as today.
-- One-term term + campus are URL state (nuqs, like the range). Term defaults to
-  the newest rollup term (the API's own default, synced back into the picker).
+- One-term term + campus are URL state (nuqs, like the range). With no `term` in
+  the URL the group uses the newest rollup term (from the page's `rollupTerms`
+  prop — the same list the API defaults from); it's shown in the picker but only
+  written to the URL once the user picks a term.
 - Waitlist removed: Course demand's Waitlist sort + tooltip row; the waitlist line
   on Course enrollment over time.
 
