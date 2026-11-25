@@ -269,6 +269,17 @@ test("term selections persist in the URL (nuqs)", async ({ page }) => {
   await expect(page).toHaveURL(/special=true/);
 });
 
+test("summer is off by default and toggles on via the URL", async ({ page }) => {
+  await page.goto("/analytics");
+  const trends = page.getByRole("region", { name: "Trends over time" });
+  await expect(trends.getByRole("button", { name: "Fall", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(trends.getByRole("button", { name: "Spring", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(trends.getByRole("button", { name: "Summer", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await trends.getByRole("button", { name: "Summer", exact: true }).click();
+  await expect(page).toHaveURL(/summer=true/);
+  await expect(trends.getByRole("button", { name: "Summer", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("term filters initialise from the URL (nuqs)", async ({ page }) => {
   await page.goto("/analytics?fall=false");
   // Fall toggled off via the URL → button reflects it and the (all-Fall) default

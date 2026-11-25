@@ -130,7 +130,7 @@ function AnalyticsAppInner({
       to: parseAsString.withDefault(""),
       fall: parseAsBoolean.withDefault(true),
       spring: parseAsBoolean.withDefault(true),
-      summer: parseAsBoolean.withDefault(true),
+      summer: parseAsBoolean.withDefault(false),
       special: parseAsBoolean.withDefault(false),
       // "Term snapshot" group: drives both single-term charts (Course demand +
       // When classes meet). Empty term = the default (see snapshotTerm below).
@@ -155,7 +155,8 @@ function AnalyticsAppInner({
   );
 
   // Semester + special-session filters (apply to the trend charts alongside the
-  // range). Default: all semesters on, special sub-terms (Extension /
+  // range). Default: Fall + Spring on; Summer off (its much smaller enrollment
+  // makes every trend line sawtooth) and special sub-terms (Extension /
   // Apprenticeship) hidden.
   type BaseSemester = Exclude<Semester, "Other">;
   const semesters: Record<BaseSemester, boolean> = React.useMemo(
