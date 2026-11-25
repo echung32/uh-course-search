@@ -212,13 +212,28 @@ function localStatement(
   };
 }
 
+/**
+ * Opens a SQLite file for read/write with the pragmas every backend process
+ * (ingestion CLI, home SQL gateway, backups) shares:
+ *   - foreign keys OFF to match D1, which does not enforce FK constraints by
+ *     default (node:sqlite enables them by default). Child rows are pruned
+ *     explicitly in the upsert path.
+ *   - WAL so the gateway keeps serving reads while ingestion holds a write
+ *     transaction on the same file (separate processes / containers).
+ *   - busy_timeout so a writer briefly blocked by another writer waits instead
+ *     of failing with SQLITE_BUSY.
+ */
+export function openSqliteFile(path: string): DatabaseSync {
+  const db = new DatabaseSync(path, { enableForeignKeyConstraints: false });
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
+  return db;
+}
+
 export function localSqliteD1(filePath?: string): D1Like {
-  // Foreign keys are intentionally OFF to match D1, which does not enforce FK
-  // constraints by default. node:sqlite enables them by default, so it must be
-  // disabled explicitly. Child rows are pruned explicitly in the upsert path.
-  const db = new DatabaseSync(filePath ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE"), {
-    enableForeignKeyConstraints: false,
-  });
+  const db = openSqliteFile(
+    filePath ?? findLocalD1File("course_section", "SEARCH_D1_LOCAL_FILE")
+  );
   return {
     prepare(query: string) {
       return localStatement(db, query, []);
@@ -227,7 +242,9 @@ export function localSqliteD1(filePath?: string): D1Like {
       db.exec("BEGIN");
       try {
         const out: D1Result[] = [];
-        for (const stmt of statements) out.push(await stmt.run());
+        // all() (not run()) so batched SELECTs return their rows, as D1's
+        // native batch does; for writes it executes identically.
+        for (const stmt of statements) out.push(await stmt.all());
         db.exec("COMMIT");
         return out;
       } catch (err) {

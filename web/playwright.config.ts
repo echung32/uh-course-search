@@ -43,12 +43,12 @@ export default defineConfig({
     {
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts"],
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts"],
     },
   ],
 
