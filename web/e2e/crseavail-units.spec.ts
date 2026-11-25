@@ -129,3 +129,63 @@ test("crseavailEnabled reflects CRSEAVAIL", async () => {
     else process.env.CRSEAVAIL = prev;
   }
 });
+
+test.describe("crseavail map", () => {
+  test("buildCourseFacts maps ICS 311 like Banner", async () => {
+    const { buildCourseFacts } = await import("../src/lib/crseavail/map");
+    const index = new Map([
+      ["77062", { term: "202710", campus: "University of Hawaii at Manoa", subject: "ICS", courseNumber: "3110" }],
+    ]);
+    const out = buildCourseFacts(
+      {
+        courses: JSON.parse(sample("courses.json")),
+        descs: JSON.parse(sample("course-desc.json")),
+        grading: JSON.parse(sample("course-grading.json")),
+      },
+      index
+    );
+    expect(out.size).toBe(1);
+    const e = out.get("University of Hawaii at Manoa|ICS|3110")!;
+    expect(e.crns).toEqual(["77062"]);
+    expect(e.facts.gradingModes).toEqual(["Audit  A", "Credit/No Credit  C", "Letter Plus + Minus  G"]);
+    expect(e.facts.creditBreakdown.creditHours).toBe(4);
+    expect(e.facts.collegeCode).toBe("14");
+    expect(e.facts.departmentCode).toBe("ICS");
+    expect(e.facts.description!.startsWith("(4 1-hr Lec) Design and correctness")).toBe(true);
+    expect(e.facts.description!.endsWith("or consent.")).toBe(true);
+  });
+
+  test("crossListMap excludes self and nulls ungrouped CRNs", async () => {
+    const { crossListMap } = await import("../src/lib/crseavail/map");
+    const rows = JSON.parse(sample("crosslist.json")) as Array<{ ssbsectCrn: string; ssrxlstXlstGroup: string }>;
+    const g = rows[0].ssrxlstXlstGroup;
+    const members = [...new Set(rows.filter((r) => r.ssrxlstXlstGroup === g).map((r) => r.ssbsectCrn))];
+    expect(members.length).toBeGreaterThan(1);
+    const m = crossListMap(rows as never, [...members, "99999"]);
+    for (const c of members) {
+      const v = m.get(c)!;
+      expect(v).not.toContain(c);
+      expect(v).toEqual(members.filter((x) => x !== c).sort((a, b) => Number(a) - Number(b)));
+    }
+    expect(m.get("99999")).toBeNull();
+  });
+
+  test("buildCampusCodeMap ignores null campus and picks the majority", async () => {
+    const { extractCampusPairs, buildCampusCodeMap } = await import("../src/lib/crseavail/map");
+    const mk = (code: string | null) =>
+      JSON.stringify({ campusDescription: "UH Manoa", meetingsFaculty: [{ meetingTime: { campus: code } }] });
+    const pairs = [mk("MAN"), mk("MAN"), mk("XXX"), mk(null)].flatMap(extractCampusPairs);
+    expect(pairs).toHaveLength(3);
+    expect(buildCampusCodeMap(pairs).get("UH Manoa")).toBe("MAN");
+  });
+
+  test("deriveScheduleTypes formats Desc  CODE", async () => {
+    const { deriveScheduleTypes } = await import("../src/lib/crseavail/map");
+    const raw = JSON.stringify({
+      scheduleTypeDescription: "Lecture",
+      meetingsFaculty: [{ meetingTime: { meetingScheduleType: null } }, { meetingTime: { meetingScheduleType: "LEC" } }],
+    });
+    const none = JSON.stringify({ scheduleTypeDescription: "Lecture", meetingsFaculty: [] });
+    expect(deriveScheduleTypes([raw, raw, none])).toEqual(["Lecture  LEC"]);
+  });
+});
