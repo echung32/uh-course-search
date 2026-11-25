@@ -1,4 +1,5 @@
 // Row shapes for UH's public Class Availability ("crseavail") JSON API.
+// crseavail omits null-valued fields, so every `| null` field is optional (absent = null).
 // Only the fields we consume are declared; responses carry many more.
 export interface CaSubjectRow {
   stvtermCode: string;
@@ -13,9 +14,9 @@ export interface CaCourseRow {
   ssbsectCrn1: string;
   crseNumb: string;
   subjCode: string;
-  collCode: string | null;
-  deptCode: string | null;
-  creditHrLow: number | null;
+  collCode?: string | null;
+  deptCode?: string | null;
+  creditHrLow?: number | null;
   creditHrHigh?: number | null; // absent in real responses when the course has no credit range
   lecHrLow?: number | null;
   labHrLow?: number | null;
@@ -28,7 +29,7 @@ export interface CaCourseRow {
 
 export interface CaCourseDescRow {
   ssbsectCrn1: string;
-  textNarrative: string | null;
+  textNarrative?: string | null;
 }
 
 export interface CaGradingRow {

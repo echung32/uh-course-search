@@ -48,9 +48,9 @@ function okKind(v: unknown, k: Kind): boolean {
     case "number":
       return typeof v === "number" && Number.isFinite(v);
     case "nullable-string":
-      return v === null || typeof v === "string";
+      return v === undefined || v === null || typeof v === "string";
     case "nullable-number":
-      return v === null || (typeof v === "number" && Number.isFinite(v));
+      return v === undefined || v === null || (typeof v === "number" && Number.isFinite(v));
   }
 }
 

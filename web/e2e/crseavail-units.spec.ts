@@ -31,6 +31,12 @@ test.beforeAll(async () => {
         return res.end("<html>blocked</html>");
       }
       if (mode === "empty-row") return json("[{}]");
+      if (mode === "nulls-omitted") {
+        return json(url.pathname.endsWith("/course-desc")
+          ? '[{"ssbsectCrn1":"1"}]'
+          : '[{"ssbsectCrn1":"1","crseNumb":"101","subjCode":"ICS"}]');
+      }
+      if (mode === "no-crse") return json('[{"ssbsectCrn1":"1","subjCode":"ICS"}]');
       if (mode === "503") {
         if (flaky++ < 1) return json("{}", 503);
         return json("[]");
@@ -86,6 +92,16 @@ test("HTML 200 -> not-json", async () => {
 test("row missing ssbsectCrn1 -> shape", async () => {
   const { caCourses } = await import("../src/lib/crseavail/client");
   const err = await withFail("empty-row", () => caCourses(unit)).catch((e) => e);
+  expect(err.reason).toBe("shape");
+});
+
+test("omitted nullable fields validate; missing crseNumb is shape", async () => {
+  const { caCourses, caCourseDesc } = await import("../src/lib/crseavail/client");
+  const rows = await withFail("nulls-omitted", () => caCourses(unit));
+  expect(rows).toHaveLength(1);
+  const desc = await withFail("nulls-omitted", () => caCourseDesc(unit));
+  expect(desc).toHaveLength(1);
+  const err = await withFail("no-crse", () => caCourses(unit)).catch((e) => e);
   expect(err.reason).toBe("shape");
 });
 
