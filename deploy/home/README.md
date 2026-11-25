@@ -134,7 +134,7 @@ machine with wrangler auth.
   - **One term:** `docker compose exec cron /app/deploy/home/run-capture.sh --term 202700` captures just that term, even if it is being skipped.
   - **Late manual runs:** the 21:45 HST cut only applies to a run *started before* 21:45. A run started later gets its full `--maxMinutes` budget (default 180) and holds the shared lock, so the 22:00 refresh is skipped until it ends (the run logs a warning). After 21:45, pass a small budget: `docker compose exec cron /app/deploy/home/run-capture.sh --maxMinutes 10`.
   - **crseavail:** with `CRSEAVAIL=1` (in `.env`), course facts and cross-lists come from UH's Class Availability API in bulk, falling back to Banner automatically per campus+subject when a response fails or looks wrong. Units are fetched one at a time, `CRSEAVAIL_DELAY_MS` (default 250) apart. Each fallback is logged with the unit and the reason (in `docker compose logs cron`, even with `LOG_SOURCE=0`) and recorded in `sync_run.notes` (`"crseavail":"degraded"`, `unitsFallback`). Unset it to go Banner-only. It ships **off**; see "Enabling crseavail" below.
-- **Schema changes and updates.** Migrations are baked into the image, so build first and migrate from the new image. Migrate the home DB **before** deploying a Worker that needs the new schema (e.g. the Worker that reads migration 0015's columns), and keep the cron jobs off the DB while migrating:
+- **Schema changes and updates.** Migrations are baked into the image, so build first and migrate from the new image. Migrate the home DB **before** deploying a Worker that needs the new schema (e.g. the Worker that reads migration 0017's columns), and keep the cron jobs off the DB while migrating:
   ```bash
   git pull
   docker compose build
@@ -146,7 +146,7 @@ machine with wrangler auth.
   ```
   Only then (step 4) deploy the Worker: `yarn deploy` from `web/`, wherever you deploy from. Worker code that reads a new column 503s every search until the migration has run.
 
-  Migration 0015 (per-fragment freshness stamps) rewrites every `section_detail` and `course` row in one transaction, about 1 GB of writes on the full search DB. Make sure the disk has free space of at least the DB's size before running it.
+  Migration 0017 (per-fragment freshness stamps) rewrites every `section_detail` and `course` row in one transaction, about 1 GB of writes on the full search DB. Make sure the disk has free space of at least the DB's size before running it.
 - **One-time: `0016` usual date ranges (Schedule column).** After migrating to `0016` (which also repairs NULL `section_meeting.begin_date` rows from `raw_json`), fill `term.usual_start_date/usual_end_date` for every term, then deploy the Worker:
   ```bash
   docker compose run --rm cron yarn ingest usual-dates     # or --term 202710 for one term

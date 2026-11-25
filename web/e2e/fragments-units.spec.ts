@@ -1,4 +1,4 @@
-// Node-only unit tests for the per-fragment DB writers and migration 0015.
+// Node-only unit tests for the per-fragment DB writers and migration 0017.
 import { test, expect } from "@playwright/test";
 import { freshSearchDb, type FreshSearchDb } from "./sqlite-fixture";
 import type { D1Like, D1PreparedStatement } from "../src/lib/db/types";
@@ -42,8 +42,8 @@ const facts: CourseFacts = {
   description: null,
 };
 
-test("0015 backfills fragment timestamps only for fragments that were fetched", () => {
-  f = freshSearchDb({ upTo: "0014" });
+test("0017 backfills fragment timestamps only for fragments that were fetched", () => {
+  f = freshSearchDb({ upTo: "0016" });
   const sd = f.raw.prepare(
     `INSERT INTO section_detail (term, crn, raw_restrictions_html, raw_fees_html, raw_linked_html,
                                  raw_syllabus_html, raw_xlst_html, synced_at)
