@@ -90,17 +90,29 @@ export async function getTermSyncMeta(
   db: D1Like,
   term: string
 ): Promise<TermSyncMeta | null> {
-  const row = await db
-    .prepare(
-      "SELECT last_synced_at, is_view_only, usual_start_date, usual_end_date FROM term WHERE code = ?"
-    )
-    .bind(term)
-    .first<{
-      last_synced_at: number | null;
-      is_view_only: number;
-      usual_start_date: string | null;
-      usual_end_date: string | null;
-    }>();
+  let row: {
+    last_synced_at: number | null;
+    is_view_only: number;
+    usual_start_date?: string | null;
+    usual_end_date?: string | null;
+  } | null;
+  try {
+    row = await db
+      .prepare(
+        "SELECT last_synced_at, is_view_only, usual_start_date, usual_end_date FROM term WHERE code = ?"
+      )
+      .bind(term)
+      .first();
+  } catch (err) {
+    // A store without migration 0015 (the frozen native-D1 rollback target):
+    // serve without a usual range — every meeting shows its dates — rather than
+    // failing every search/filters/coverage request on the missing column.
+    if (!/no such column/i.test(String(err))) throw err;
+    row = await db
+      .prepare("SELECT last_synced_at, is_view_only FROM term WHERE code = ?")
+      .bind(term)
+      .first();
+  }
   if (!row) return null;
   return {
     lastSyncedAt: row.last_synced_at,

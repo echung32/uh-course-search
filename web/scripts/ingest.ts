@@ -38,7 +38,7 @@ import { backfillNextTerm } from "@/lib/ingest/backfill";
 import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
 import { computeAllRollups, computeTermRollups } from "@/lib/ingest/rollups";
 import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
-import { refreshTermUsualDates } from "@/lib/db/usualDates";
+import { refreshAllUsualDates, refreshTermUsualDates } from "@/lib/db/usualDates";
 
 type Flags = Record<string, string | boolean>;
 
@@ -138,16 +138,12 @@ async function main() {
     }
 
     case "usual-dates": {
-      // One-time (and on-demand) fill of term.usual_start_date/usual_end_date;
-      // successful syncs keep mutable terms current after that.
-      const codes =
+      // One-time (and on-demand) fill of term.usual_start_date/usual_end_date
+      // for backfilled terms; successful syncs keep mutable terms current.
+      const terms =
         typeof flags.term === "string"
-          ? [flags.term]
-          : (await db.prepare("SELECT code FROM term ORDER BY code").all<{ code: string }>()).results.map(
-              (r) => r.code
-            );
-      const terms = [];
-      for (const term of codes) terms.push({ term, range: await refreshTermUsualDates(db, term) });
+          ? [{ term: flags.term, range: await refreshTermUsualDates(db, flags.term) }]
+          : await refreshAllUsualDates(db);
       console.log(JSON.stringify({ ok: true, terms }, null, 2));
       break;
     }

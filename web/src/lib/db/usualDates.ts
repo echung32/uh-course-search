@@ -40,3 +40,21 @@ export async function refreshTermUsualDates(db: D1Like, term: string): Promise<D
     .run();
   return range;
 }
+
+/**
+ * Recomputes every backfilled term. Dynamic (never-backfilled) terms are
+ * skipped: their section_meeting rows are only the page-cache pages users
+ * happened to view, so one cached summer session would wrongly pass 60% — and
+ * nothing would ever correct it until the term is backfilled (which then runs
+ * markTermSynced → refreshTermUsualDates with the full section set).
+ */
+export async function refreshAllUsualDates(
+  db: D1Like
+): Promise<{ term: string; range: DateRange | null }[]> {
+  const { results } = await db
+    .prepare("SELECT code FROM term WHERE last_synced_at IS NOT NULL ORDER BY code")
+    .all<{ code: string }>();
+  const out: { term: string; range: DateRange | null }[] = [];
+  for (const { code } of results) out.push({ term: code, range: await refreshTermUsualDates(db, code) });
+  return out;
+}

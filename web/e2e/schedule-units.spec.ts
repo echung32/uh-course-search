@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { localSqliteD1, openSqliteFile } from "../src/lib/db/client";
-import { pickUsualDateRange, refreshTermUsualDates } from "../src/lib/db/usualDates";
+import { pickUsualDateRange, refreshAllUsualDates, refreshTermUsualDates } from "../src/lib/db/usualDates";
+import { getTermSyncMeta } from "../src/lib/db/queries";
 import { termCacheProfile } from "../src/lib/edgeCache";
 
 function mt(overrides: Partial<MeetingTime> = {}): MeetingTime {
@@ -184,4 +185,41 @@ test("termCacheProfile re-keys when the usual date range changes", () => {
   const before = termCacheProfile({ ...base, usualDateRange: null });
   const after = termCacheProfile({ ...base, usualDateRange: { start: "01/11/2027", end: "05/14/2027" } });
   expect(before?.version).not.toBe(after?.version);
+});
+
+test("getTermSyncMeta still works on a pre-0015 database (D1 rollback path)", async () => {
+  const { dir, db } = tempSearchDb("0015");
+  try {
+    db.prepare(
+      "INSERT INTO term (code, description, is_view_only, last_synced_at) VALUES ('202710', 'Fall 2026', 0, 123)"
+    ).run();
+    expect(await getTermSyncMeta(localSqliteD1(db), "202710")).toEqual({
+      lastSyncedAt: 123,
+      isViewOnly: false,
+      usualDateRange: null,
+    });
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("refreshAllUsualDates skips never-backfilled (dynamic) terms", async () => {
+  const { dir, db } = tempSearchDb();
+  try {
+    db.prepare("INSERT INTO term (code, description, last_synced_at) VALUES ('202710', 'Fall 2026', 1)").run();
+    db.prepare("INSERT INTO term (code, description, last_synced_at) VALUES ('202640', 'Summer 2026', NULL)").run();
+    insertMeetings(db, "202710", [[A, B], [A, B], [A, B]]);
+    // A dynamic term's page cache holds one session's page — it must not become "usual".
+    insertMeetings(db, "202640", [["05/26/2026", "07/02/2026"], ["05/26/2026", "07/02/2026"]]);
+
+    const result = await refreshAllUsualDates(localSqliteD1(db));
+
+    expect(result).toEqual([{ term: "202710", range: { start: A, end: B } }]);
+    expect(db.prepare("SELECT usual_start_date FROM term WHERE code = '202640'").get())
+      .toEqual({ usual_start_date: null });
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
