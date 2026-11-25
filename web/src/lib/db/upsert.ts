@@ -697,7 +697,7 @@ export async function upsertCourseFacts(
        ON CONFLICT(term, campus_description, subject, course_number) DO UPDATE SET
          college_code = COALESCE(excluded.college_code, course.college_code),
          college_name = COALESCE(excluded.college_name, course.college_name),
-         department = excluded.department,
+         department = COALESCE(excluded.department, course.department),
          department_code = COALESCE(excluded.department_code, course.department_code),
          grading_modes = excluded.grading_modes,
          schedule_types = excluded.schedule_types,
@@ -804,7 +804,7 @@ export async function upsertInstructor(
        ON CONFLICT(banner_id) DO UPDATE SET
          display_name = excluded.display_name,
          title = excluded.title,
-         department = COALESCE(excluded.department, course.department),
+         department = excluded.department,
          college = excluded.college,
          email = excluded.email,
          raw_json = excluded.raw_json,

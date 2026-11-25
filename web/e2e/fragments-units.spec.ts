@@ -107,12 +107,13 @@ test("upsertCourseFacts never nulls description or touches prereqs", async () =>
   f = freshSearchDb();
   await upsertCourseFacts(f.db, key, { ...facts, description: "Desc" }, "banner", 50);
   await updateCoursePrereqs(f.db, key, { prerequisites: "P", corequisites: null, rawPrereqHtml: "<p>P</p>", rawCoreqHtml: null }, 60);
-  await upsertCourseFacts(f.db, key, { ...facts, collegeCode: null }, "crseavail", 70);
+  await upsertCourseFacts(f.db, key, { ...facts, collegeCode: null, department: null }, "crseavail", 70);
   const r = f.raw.prepare("SELECT * FROM course").get() as Record<string, unknown>;
   expect(r.description).toBe("Desc");
   expect(r.prerequisites).toBe("P");
   expect(r.prereq_synced_at).toBe(60);
   expect(r.college_code).toBe("14");
+  expect(r.department).toBe("ICS");
   expect(r.facts_source).toBe("crseavail");
   expect(r.facts_synced_at).toBe(70);
 });
