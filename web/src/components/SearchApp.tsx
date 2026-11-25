@@ -15,6 +15,7 @@ import {
 } from "./SearchForm";
 import { ResultsTable } from "./ResultsTable";
 import { SectionDialog } from "./SectionDialog";
+import { ErrorBoundary } from "./ErrorBoundary";
 import type { CoverageParams } from "./CoverageDialog";
 import {
   ALL_CAMPUSES,
@@ -363,23 +364,39 @@ function SearchAppInner({ terms }: SearchAppProps) {
         </div>
       )}
 
-      <ResultsTable
-        results={results}
-        searchParams={coverageParams}
-        tookMs={tookMs}
-        isLoading={isLoading}
-        onPageChange={handlePageChange}
-        onPageSizeChange={handlePageSizeChange}
-        onSelectCrn={openDetail}
-        showCampus={!campusScoped}
-      />
+      {/* Boundaries keep a render error in the table or dialog from unmounting
+          the whole island (form included). Each resets when its data changes. */}
+      <ErrorBoundary
+        resetKey={results}
+        fallback={
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"
+          >
+            These results couldn't be displayed. Try a different search.
+          </div>
+        }
+      >
+        <ResultsTable
+          results={results}
+          searchParams={coverageParams}
+          tookMs={tookMs}
+          isLoading={isLoading}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          onSelectCrn={openDetail}
+          showCampus={!campusScoped}
+        />
+      </ErrorBoundary>
 
-      <SectionDialog
-        term={q.term}
-        crn={q.view || null}
-        onSelectCrn={openDetail}
-        onClose={closeDetail}
-      />
+      <ErrorBoundary resetKey={`${q.term}|${q.view}`} fallback={null}>
+        <SectionDialog
+          term={q.term}
+          crn={q.view || null}
+          onSelectCrn={openDetail}
+          onClose={closeDetail}
+        />
+      </ErrorBoundary>
     </div>
   );
 }
