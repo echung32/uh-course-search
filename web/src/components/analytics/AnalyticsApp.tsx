@@ -133,8 +133,7 @@ function AnalyticsAppInner({
       summer: parseAsBoolean.withDefault(true),
       special: parseAsBoolean.withDefault(false),
       // "One term" group: drives both single-term charts (Course demand + When
-      // classes meet). Empty term = newest rollup term, resolved by the
-      // fill-rate API and written back here.
+      // classes meet). Empty term = the newest rollup term (see oneTerm below).
       term: parseAsString.withDefault(""),
       campus: parseAsString.withDefault(""),
     },
@@ -304,22 +303,23 @@ function AnalyticsAppInner({
     () => campuses.map((c) => ({ value: c, label: c })),
     [campuses]
   );
+  // The "One term" group's effective term: the URL's, else the newest rollup
+  // term — the same getRollupTerms() list the fill-rate API defaults from, so
+  // both charts request one concrete term from their first fetch (no term-less
+  // fetch whose late response could clobber a term the user already picked).
+  const oneTerm = q.term || newest;
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
+    let stale = false; // drop a superseded response (fast term/campus switches)
     const params = new URLSearchParams({ limit: "20" });
-    if (q.term) params.set("term", q.term);
+    if (oneTerm) params.set("term", oneTerm);
     if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/fill-rate?${params}`)
       .then((r) => r.json())
-      .then((d) => {
-        setRows(d.rows ?? []);
-        // On the initial empty-term load, sync the picker to the term the API chose.
-        if (!q.term && d.term) setQ({ term: d.term });
-      })
-      .catch(() => setRows([]));
-    // setQ is stable (nuqs); omitted so it never retriggers the fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.term, q.campus]);
+      .then((d) => { if (!stale) setRows(d.rows ?? []); })
+      .catch(() => { if (!stale) setRows([]); });
+    return () => { stale = true; };
+  }, [oneTerm, q.campus]);
 
   // ── Chart #6: subject growth ranking ──
   // Shares the dashboard term-range + semester filters: growth is measured
@@ -337,18 +337,19 @@ function AnalyticsAppInner({
   );
 
   // ── Chart #7: meeting-time heatmap ──
-  // Shares the "One term" group's term + campus. Waits for the term to resolve
-  // (the fill-rate fetch picks the default) so both charts show the same term.
+  // Shares the "One term" group's term + campus.
   const [heat, setHeat] = React.useState<MeetingHeatCell[]>([]);
   React.useEffect(() => {
-    if (!q.term) return;
-    const params = new URLSearchParams({ term: q.term });
+    if (!oneTerm) return;
+    let stale = false;
+    const params = new URLSearchParams({ term: oneTerm });
     if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/meeting-heatmap?${params}`)
       .then((r) => r.json())
-      .then((d) => setHeat(d.cells ?? []))
-      .catch(() => setHeat([]));
-  }, [q.term, q.campus]);
+      .then((d) => { if (!stale) setHeat(d.cells ?? []); })
+      .catch(() => { if (!stale) setHeat([]); });
+    return () => { stale = true; };
+  }, [oneTerm, q.campus]);
 
   return (
     <div className="space-y-8">
@@ -488,7 +489,7 @@ function AnalyticsAppInner({
               <p className="mb-1 text-sm font-medium">Term</p>
               <Combobox
                 options={termOptions}
-                value={q.term}
+                value={oneTerm}
                 onChange={(v) => setQ({ term: v })}
                 placeholder="Select a term"
                 searchPlaceholder="Search terms"

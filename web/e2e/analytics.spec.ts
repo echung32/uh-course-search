@@ -201,16 +201,39 @@ test("page: charts are grouped under labelled filter bars", async ({ page }) => 
   await expect(trends.getByText("This chart").first()).toBeVisible();
 });
 
-test("one-term group defaults to the newest term and writes it to the URL", async ({ page, request }) => {
+test("one-term group requests the newest rollup term for both charts on first load", async ({ page, request }) => {
   // The API's own default (newest rollup term). Not hardcoded: the chromium-only
   // ingest spec adds rollups for a newer fixture term to the shared D1.
   const { term } = await (await request.get("/api/analytics/fill-rate?limit=1")).json();
   expect(term).toBeTruthy();
+  // Both charts must ask for that term on their FIRST request — no term-less
+  // fetch whose late response could overwrite a term the user already picked.
+  const fill = page.waitForRequest((r) => r.url().includes("/api/analytics/fill-rate"));
+  const heat = page.waitForRequest((r) => r.url().includes("/api/analytics/meeting-heatmap"));
   await page.goto("/analytics");
-  await expect(page).toHaveURL(new RegExp(`[?&]term=${term}(&|$)`), { timeout: 10000 });
+  expect(new URL((await fill).url()).searchParams.get("term")).toBe(term);
+  expect(new URL((await heat).url()).searchParams.get("term")).toBe(term);
   const oneTerm = page.getByRole("region", { name: "One term" });
   // One term + one campus picker drive both charts; the cards have no pickers.
   await expect(oneTerm.getByRole("combobox")).toHaveCount(2);
+});
+
+test("changing the one-term campus refetches both charts with it", async ({ page }) => {
+  const hilo = "University of Hawaii at Hilo";
+  await page.goto("/analytics?term=202710");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  const fill = page.waitForRequest(
+    (r) => r.url().includes("/api/analytics/fill-rate") && new URL(r.url()).searchParams.get("campus") === hilo
+  );
+  const heat = page.waitForRequest(
+    (r) => r.url().includes("/api/analytics/meeting-heatmap") && new URL(r.url()).searchParams.get("campus") === hilo
+  );
+  const oneTerm = page.getByRole("region", { name: "One term" });
+  await oneTerm.getByRole("combobox").filter({ hasText: "All campuses" }).click();
+  await page.getByRole("option", { name: hilo }).click();
+  expect(new URL((await fill).url()).searchParams.get("term")).toBe("202710");
+  expect(new URL((await heat).url()).searchParams.get("term")).toBe("202710");
+  await expect(page).toHaveURL(/campus=University/);
 });
 
 test("one-term campus from the URL scopes both charts", async ({ page }) => {
