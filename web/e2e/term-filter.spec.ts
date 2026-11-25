@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { classifyTerm, stripViewOnly } from "../src/components/analytics/termFilter";
+import { classifyTerm, defaultSnapshotTerm, stripViewOnly } from "../src/components/analytics/termFilter";
 
 // Pure-function test: the term-range semester + special-session filters classify
 // each term from its description.
@@ -19,4 +19,22 @@ test("stripViewOnly removes the trailing (View Only) marker", () => {
   expect(stripViewOnly("Spring 2024 (View Only)")).toBe("Spring 2024");
   expect(stripViewOnly("Fall 2026")).toBe("Fall 2026");
   expect(stripViewOnly("Fall 2025 Extension (View Only)")).toBe("Fall 2025 Extension");
+});
+
+test("defaultSnapshotTerm picks the newest base term, skipping special sub-terms", () => {
+  const labels: Record<string, string> = {
+    "202710": "Fall 2026",
+    "202713": "Fall 2026 Extension",
+    "202730": "Spring 2027",
+    "202731": "Spring 2027 Apprenticeship (View Only)",
+    "202733": "Spring 2027 Extension",
+  };
+  const label = (c: string) => labels[c] ?? c;
+  // Newest by code is 202733 (Extension) — the default must be Spring 2027.
+  expect(defaultSnapshotTerm(Object.keys(labels), label)).toBe("202730");
+  // Order-independent.
+  expect(defaultSnapshotTerm(["202733", "202710", "202730"], label)).toBe("202730");
+  // Only special terms → fall back to the newest one.
+  expect(defaultSnapshotTerm(["202713", "202733"], label)).toBe("202733");
+  expect(defaultSnapshotTerm([], label)).toBe("");
 });

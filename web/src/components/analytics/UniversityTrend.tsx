@@ -28,13 +28,20 @@ const MAX_SERIES = PALETTE.length - 1;
 export function UniversityTrend({
   points,
   termLabel,
+  rankPoints,
 }: {
   points: FacetTrendPoint[];
   termLabel: (code: string) => string;
+  /** Full (unfiltered) series used to order the bands, so a range change can't reorder them. */
+  rankPoints?: FacetTrendPoint[];
 }) {
   const { rows, keys } = React.useMemo(
-    () => pivotByTerm(topNByTotal(points, MAX_SERIES)),
-    [points]
+    () => {
+      // Fold the full series too, so "Other" ranks consistently with the bands.
+      const rank = topNByTotal(rankPoints ?? points, MAX_SERIES);
+      return pivotByTerm(topNByTotal(points, MAX_SERIES, rankPoints ?? points), rank);
+    },
+    [points, rankPoints]
   );
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">No data.</p>;
@@ -46,7 +53,7 @@ export function UniversityTrend({
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
           <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
           <YAxis fontSize={12} allowDecimals={false} />
-          <Tooltip content={<ChartTooltip labelFormatter={termLabel} />} />
+          <Tooltip content={<ChartTooltip labelFormatter={termLabel} sortByValue hideZero showTotal />} />
           {keys.map((k, i) => (
             <Area
               key={k}

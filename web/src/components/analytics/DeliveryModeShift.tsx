@@ -19,17 +19,26 @@ const PALETTE = ["#2563eb", "#16a34a", "#d97706", "#7c3aed", "#dc2626", "#0891b2
 export function DeliveryModeShift({
   points,
   termLabel,
+  rankPoints,
 }: {
   points: FacetTrendPoint[];
   termLabel: (code: string) => string;
+  /** Full (unfiltered) series used to order the bands, so a range change can't reorder them. */
+  rankPoints?: FacetTrendPoint[];
 }) {
   // Reuse the section-count pivot, then normalize to %. pivotByTerm sums
   // `enrollment`; for delivery mode we want section share, so remap first.
-  const sectionPoints = React.useMemo(
-    () => points.map((p) => ({ ...p, enrollment: p.sections })),
-    [points]
+  const toSections = (ps: FacetTrendPoint[]) =>
+    ps.map((p) => ({ ...p, enrollment: p.sections }));
+  const sectionPoints = React.useMemo(() => toSections(points), [points]);
+  const rankSections = React.useMemo(
+    () => toSections(rankPoints ?? points),
+    [rankPoints, points]
   );
-  const { rows, keys } = React.useMemo(() => pivotByTerm(sectionPoints), [sectionPoints]);
+  const { rows, keys } = React.useMemo(
+    () => pivotByTerm(sectionPoints, rankSections),
+    [sectionPoints, rankSections]
+  );
   const data = React.useMemo(() => toPercent(rows, keys), [rows, keys]);
   if (data.length === 0) {
     return <p className="text-sm text-muted-foreground">No data.</p>;
@@ -46,6 +55,8 @@ export function DeliveryModeShift({
               <ChartTooltip
                 labelFormatter={termLabel}
                 valueFormatter={(v) => `${v.toFixed(1)}%`}
+                sortByValue
+                hideZero
               />
             }
           />

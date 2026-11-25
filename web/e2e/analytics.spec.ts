@@ -90,27 +90,24 @@ test("api: fill-rate campus filter scopes the ranking to one campus", async ({ r
   expect(labels).not.toContain("ICS 1110");
 });
 
-test("api: fill-rate sort=waitlist ranks by waitlist headcount", async ({ request }) => {
-  const res = await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=20");
+test("api: fill-rate ignores a legacy sort=waitlist and excludes uncapped courses", async ({ request }) => {
+  const res = await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50");
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
-  expect(body.sort).toBe("waitlist");
-  // ARR 999 is uncapped (capped_sections=0) but has the largest waitlist (30),
-  // so it ranks first — the waitlist view must surface uncapped high-demand
-  // courses that the fill-rate gate would drop.
-  expect(body.rows[0].subjectCourse).toBe("ARR 999");
-  expect(body.rows[0].waitlist).toBeGreaterThanOrEqual(body.rows[1].waitlist);
+  expect(body.sort).toBeUndefined();
+  const labels = body.rows.map((r: { subjectCourse: string | null }) => r.subjectCourse);
+  // ARR 999 is uncapped (capped_sections=0) → no real fill-rate denominator.
+  expect(labels).not.toContain("ARR 999");
+  for (let i = 1; i < body.rows.length; i++) {
+    expect(body.rows[i - 1].fillRate).toBeGreaterThanOrEqual(body.rows[i].fillRate);
+  }
 });
 
-test("api: fill-rate (default sort) excludes uncapped courses; waitlist includes them", async ({ request }) => {
-  const fill = await (await request.get("/api/analytics/fill-rate?term=202710&limit=50")).json();
-  const wait = await (await request.get("/api/analytics/fill-rate?term=202710&sort=waitlist&limit=50")).json();
-  const labels = (b: { rows: Array<{ subjectCourse: string | null }> }) =>
-    b.rows.map((r) => r.subjectCourse);
-  // capped_sections=0 → no real fill-rate denominator → excluded from fill-rate.
-  expect(labels(fill)).not.toContain("ARR 999");
-  // …but present under waitlist sort.
-  expect(labels(wait)).toContain("ARR 999");
+test("page: analytics shows no waitlist controls or series", async ({ page }) => {
+  await page.goto("/analytics");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole("button", { name: "Waitlist" })).toHaveCount(0);
+  await expect(page.locator(".recharts-legend-wrapper").getByText("Waitlist")).toHaveCount(0);
 });
 
 test("api: subject-trend returns per-term subject facet points", async ({ request }) => {
@@ -171,12 +168,12 @@ test("api: delivery-mode returns schedule-type facet points", async ({ request }
 test("page: analytics dashboard renders the chart sections", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.getByRole("heading", { name: "Analytics" })).toBeVisible();
-  await expect(page.getByText("Course enrollment over time")).toBeVisible();
-  await expect(page.getByText("University enrollment trend")).toBeVisible();
-  await expect(page.getByText("Delivery-mode shift")).toBeVisible();
-  await expect(page.getByText("Course demand")).toBeVisible();
-  await expect(page.getByText("Subject growth")).toBeVisible();
-  await expect(page.getByText("When classes meet")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Course enrollment over time", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "University enrollment trend", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Delivery-mode shift", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Course demand", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Subject growth", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "When classes meet", exact: true })).toBeVisible();
   // Term-range control with its quick presets.
   await expect(page.getByText("Term range")).toBeVisible();
   await expect(page.getByRole("button", { name: "Last 5 yrs" })).toBeVisible();
@@ -186,6 +183,64 @@ test("page: analytics dashboard renders the chart sections", async ({ page }) =>
   await expect(
     page.getByRole("combobox").filter({ hasText: "All campuses" }).first()
   ).toBeVisible({ timeout: 10000 });
+});
+
+test("page: charts are grouped under labelled filter bars", async ({ page }) => {
+  await page.goto("/analytics");
+  const trends = page.getByRole("region", { name: "Trends over time" });
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
+  await expect(trends.getByText("These filters apply to all 4 charts in this group")).toBeVisible();
+  await expect(oneTerm.getByText("These filters apply to both charts in this group")).toBeVisible();
+  for (const t of ["Course enrollment over time", "University enrollment trend", "Delivery-mode shift", "Subject growth"]) {
+    await expect(trends.getByRole("heading", { name: t, exact: true })).toBeVisible();
+  }
+  for (const t of ["Course demand", "When classes meet"]) {
+    await expect(oneTerm.getByRole("heading", { name: t, exact: true })).toBeVisible();
+  }
+  await expect(trends.getByText("Term range")).toBeVisible();
+  await expect(trends.getByText("This chart").first()).toBeVisible();
+});
+
+test("term-snapshot group requests one base term for both charts on first load", async ({ page }) => {
+  // Both charts must ask for the same concrete term on their FIRST request — no
+  // term-less fetch whose late response could overwrite a term the user picked.
+  // (Which term is defaultSnapshotTerm's job; see term-filter.spec.ts.)
+  const fill = page.waitForRequest((r) => r.url().includes("/api/analytics/fill-rate"));
+  const heat = page.waitForRequest((r) => r.url().includes("/api/analytics/meeting-heatmap"));
+  await page.goto("/analytics");
+  const fillTerm = new URL((await fill).url()).searchParams.get("term");
+  expect(fillTerm).toBeTruthy();
+  expect(new URL((await heat).url()).searchParams.get("term")).toBe(fillTerm);
+  const snapshot = page.getByRole("region", { name: "Term snapshot" });
+  // One term picker + one campus picker drive both charts; the cards have no pickers.
+  await expect(snapshot.getByRole("combobox")).toHaveCount(2);
+  // The default is a base semester, never a special sub-term.
+  await expect(snapshot.getByRole("combobox").first()).not.toHaveText(/Extension|Apprenticeship|Accelerated/);
+});
+
+test("changing the term-snapshot campus refetches both charts with it", async ({ page }) => {
+  const hilo = "University of Hawaii at Hilo";
+  await page.goto("/analytics?term=202710");
+  await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
+  const fill = page.waitForRequest(
+    (r) => r.url().includes("/api/analytics/fill-rate") && new URL(r.url()).searchParams.get("campus") === hilo
+  );
+  const heat = page.waitForRequest(
+    (r) => r.url().includes("/api/analytics/meeting-heatmap") && new URL(r.url()).searchParams.get("campus") === hilo
+  );
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
+  await oneTerm.getByRole("combobox").filter({ hasText: "All campuses" }).click();
+  await page.getByRole("option", { name: hilo }).click();
+  expect(new URL((await fill).url()).searchParams.get("term")).toBe("202710");
+  expect(new URL((await heat).url()).searchParams.get("term")).toBe("202710");
+  await expect(page).toHaveURL(/campus=University/);
+});
+
+test("term-snapshot campus from the URL scopes both charts", async ({ page }) => {
+  await page.goto("/analytics?term=202710&campus=" + encodeURIComponent("University of Hawaii at Hilo"));
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
+  await expect(oneTerm.getByRole("combobox").filter({ hasText: "University of Hawaii at Hilo" })).toHaveCount(1);
+  await expect(oneTerm.getByRole("combobox").filter({ hasText: "All campuses" })).toHaveCount(0);
 });
 
 test("course picker defaults to ICS 101", async ({ page }) => {
@@ -212,6 +267,17 @@ test("term selections persist in the URL (nuqs)", async ({ page }) => {
   await expect(page).toHaveURL(/range=all/);
   await page.getByRole("button", { name: "Special sessions", exact: true }).click();
   await expect(page).toHaveURL(/special=true/);
+});
+
+test("summer is off by default and toggles on via the URL", async ({ page }) => {
+  await page.goto("/analytics");
+  const trends = page.getByRole("region", { name: "Trends over time" });
+  await expect(trends.getByRole("button", { name: "Fall", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(trends.getByRole("button", { name: "Spring", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(trends.getByRole("button", { name: "Summer", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await trends.getByRole("button", { name: "Summer", exact: true }).click();
+  await expect(page).toHaveURL(/summer=true/);
+  await expect(trends.getByRole("button", { name: "Summer", exact: true })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("term filters initialise from the URL (nuqs)", async ({ page }) => {
@@ -283,8 +349,8 @@ test("the To term dropdown lists the newest term first", async ({ page }) => {
 
 test("nav: header links between Search and Analytics", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Analytics" }).click();
+  await page.getByRole("link", { name: "Analytics", exact: true }).click();
   await expect(page).toHaveURL(/\/analytics$/);
-  await page.getByRole("link", { name: "Search" }).click();
+  await page.getByRole("link", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
 });

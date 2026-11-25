@@ -12,7 +12,8 @@ test("pivotByTerm fills missing facet keys with 0 so stacked areas stay continuo
     { term: "202710", facetValue: "Manoa", enrollment: 120, sections: 2 },
     { term: "202710", facetValue: "Hilo", enrollment: 30, sections: 1 },
   ]);
-  expect(keys).toEqual(["Hilo", "Manoa"]);
+  // Largest total first (Manoa 220 > Hilo 30) — first key = bottom of the stack.
+  expect(keys).toEqual(["Manoa", "Hilo"]);
 
   const t1 = rows.find((r) => r.term === "202610")!;
   // Hilo had no 202610 data — it must be 0, not undefined, or the stack breaks.
@@ -43,6 +44,42 @@ test("topNByTotal keeps the biggest N facet values and buckets the rest as Other
   // Already within N → unchanged (no Other bucket).
   const small = topNByTotal([{ term: "1", facetValue: "A", enrollment: 1, sections: 1 }], 5);
   expect(small.some((p) => p.facetValue === "Other")).toBe(false);
+});
+
+test("pivotByTerm stacks the biggest series first and keeps Other last", () => {
+  const { keys } = pivotByTerm([
+    { term: "1", facetValue: "Other", enrollment: 500, sections: 1 },
+    { term: "1", facetValue: "Alpha", enrollment: 10, sections: 1 },
+    { term: "1", facetValue: "Zulu", enrollment: 300, sections: 1 },
+    { term: "1", facetValue: "Mike", enrollment: 300, sections: 1 },
+  ]);
+  // By total desc, ties by name; the Other catch-all always last (top band).
+  expect(keys).toEqual(["Mike", "Zulu", "Alpha", "Other"]);
+});
+
+test("pivotByTerm ranks series by rankBy so a range change can't reorder them", () => {
+  const all = [
+    { term: "1", facetValue: "Manoa", enrollment: 1000, sections: 1 },
+    { term: "1", facetValue: "Hilo", enrollment: 100, sections: 1 },
+    { term: "2", facetValue: "Manoa", enrollment: 5, sections: 1 },
+    { term: "2", facetValue: "Hilo", enrollment: 50, sections: 1 },
+  ];
+  const inRange = all.filter((p) => p.term === "2"); // Hilo bigger within this range
+  expect(pivotByTerm(inRange).keys).toEqual(["Hilo", "Manoa"]);
+  expect(pivotByTerm(inRange, all).keys).toEqual(["Manoa", "Hilo"]);
+});
+
+test("topNByTotal picks the top N by rankBy, not just the filtered points", () => {
+  const all = [
+    { term: "1", facetValue: "A", enrollment: 100, sections: 1 },
+    { term: "1", facetValue: "B", enrollment: 90, sections: 1 },
+    { term: "2", facetValue: "A", enrollment: 1, sections: 1 },
+    { term: "2", facetValue: "B", enrollment: 1, sections: 1 },
+    { term: "2", facetValue: "C", enrollment: 50, sections: 1 },
+  ];
+  const inRange = all.filter((p) => p.term === "2");
+  const out = topNByTotal(inRange, 2, all);
+  expect(new Set(out.map((p) => p.facetValue))).toEqual(new Set(["A", "B", "Other"]));
 });
 
 test("toPercent normalises to clean rounded shares with no float dust", () => {
