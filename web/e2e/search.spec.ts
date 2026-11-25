@@ -618,22 +618,19 @@ test("schedule column keeps each meeting's time and room together", async ({ pag
   await expect(page.getByRole("columnheader", { name: "Days/Times" })).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "Location" })).toHaveCount(0);
 
-  // ICS 311 sec 001 (CRN 10005): one line per meeting, in order.
+  // ICS 311 sec 001 (CRN 10005): one line per meeting; the no-set-time online
+  // meeting goes last.
   const cell = page.getByRole("row").filter({ hasText: "10005" }).getByTestId("schedule-cell");
   const lines = cell.getByTestId("meeting-line");
   await expect(lines).toHaveCount(3);
-  await expect(lines.nth(0)).toContainText("MWF");
-  await expect(lines.nth(0)).toContainText("10:30–11:20 AM");
-  await expect(lines.nth(0)).toContainText("POST 318A");
-  await expect(lines.nth(1)).toContainText("Online Async");
-  await expect(lines.nth(2)).toContainText("6:00–7:50 PM");
-  await expect(lines.nth(2)).toContainText("KELLER 101");
-  // Only the off-range one-day meeting gets a date line.
-  await expect(cell.getByText("Sep 2 – Sep 2", { exact: true })).toHaveCount(1);
+  await expect(lines.nth(0)).toHaveText("MWF 10:30–11:20 AM POST 318A");
+  // Only the off-range one-day meeting carries dates — on its own line.
+  await expect(lines.nth(1)).toHaveText("T 6:00–7:50 PM KELLER 101 Sep 2 only");
+  await expect(lines.nth(2)).toHaveText("— ONLINE ASYNC");
   await expect(cell).not.toContainText("Aug 25");
 
   // ICS 211 (CRN 10004) meets on the usual dates → no date line at all.
   const plain = page.getByRole("row").filter({ hasText: "10004" }).getByTestId("schedule-cell");
   await expect(plain).toContainText("9:00–9:50 AM");
-  await expect(plain).not.toContainText(/[A-Z][a-z]{2} \d+ – /);
+  await expect(plain).not.toContainText(/[A-Z][a-z]{2} \d+ (–|only)/);
 });

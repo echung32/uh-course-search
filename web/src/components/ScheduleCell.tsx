@@ -1,20 +1,21 @@
-import { Fragment } from "react";
+import { CalendarDays } from "lucide-react";
 import {
   formatDateRange,
   formatDays,
   formatMeetingLocation,
   formatTimeRange,
   isOnlineMeeting,
+  orderMeetings,
   shouldShowMeetingDates,
 } from "@/lib/meetingTime";
 import type { DateRange, MeetingTime } from "@/lib/sis/types";
 
 /**
- * The results table's Schedule cell: one line per meeting (days | time | room)
- * in a shared 3-column grid, so a meeting's time and room can never drift onto
- * different visual lines (the old separate Days/Times + Location columns did as
- * soon as a room wrapped). A meeting whose dates differ from the term's usual
- * range gets a small date line under it.
+ * The results table's Schedule cell: one line per meeting (days | time | room |
+ * dates) in a shared 4-column grid, so a meeting's time, room, and dates can
+ * never drift onto different visual lines (the old separate Days/Times +
+ * Location columns did as soon as a room wrapped). Dates appear only when they
+ * differ from the term's usual range. Meetings with no set time go last.
  */
 export function ScheduleCell({
   meetings,
@@ -28,38 +29,37 @@ export function ScheduleCell({
   return (
     <div
       data-testid="schedule-cell"
-      className="grid grid-cols-[auto_auto_auto] gap-x-3.5 gap-y-0.5 whitespace-nowrap text-sm tabular-nums"
+      className="grid grid-cols-[repeat(4,auto)] justify-start items-center gap-x-3.5 gap-y-0.5 whitespace-nowrap text-sm tabular-nums"
     >
-      {meetings.map((mt, i) => {
+      {orderMeetings(meetings).map((mt, i) => {
         const time = formatTimeRange(mt.beginTime, mt.endTime);
-        const location = formatMeetingLocation(mt);
         const dates =
           shouldShowMeetingDates(mt, usualDateRange) && mt.startDate && mt.endDate
             ? formatDateRange(mt.startDate, mt.endDate)
             : null;
+        // The {" "} separators are invisible in the grid but keep the line's
+        // text readable when copied or read by a screen reader.
         return (
-          <Fragment key={i}>
-            <div data-testid="meeting-line" className="contents">
-              {time === null && isOnlineMeeting(mt) ? (
-                // No set time (async / TBA online): the label stands alone.
+          <div key={i} data-testid="meeting-line" className="contents">
+            <span className="font-semibold">{time === null ? "" : formatDays(mt)}</span>{" "}
+            {time !== null ? (
+              <span>{time}</span>
+            ) : isOnlineMeeting(mt) ? (
+              // Online with no set time (async): a dash, not "TBA".
+              <span className="text-muted-foreground">—</span>
+            ) : (
+              <span>TBA</span>
+            )}{" "}
+            <span>{formatMeetingLocation(mt)}</span>{" "}
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              {dates && (
                 <>
-                  <span className="col-span-2 italic text-muted-foreground">{location}</span>
-                  <span />
-                </>
-              ) : (
-                <>
-                  <span className="font-semibold">{time === null ? "" : formatDays(mt)}</span>
-                  <span>{time ?? "TBA"}</span>
-                  <span>{location}</span>
+                  <CalendarDays aria-hidden="true" className="h-3 w-3" />
+                  {dates}
                 </>
               )}
-            </div>
-            {dates && (
-              <span className="col-span-3 mb-1 text-[11px] leading-tight text-muted-foreground last:mb-0">
-                {dates}
-              </span>
-            )}
-          </Fragment>
+            </span>
+          </div>
         );
       })}
     </div>

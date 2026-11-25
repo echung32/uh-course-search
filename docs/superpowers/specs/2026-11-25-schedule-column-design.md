@@ -42,28 +42,28 @@ redesign should cover:
 ### Schedule cell (`ResultsTable`)
 
 - Replaces the Days/Times and Location columns with one **Schedule** column.
-- The cell is a 3-column CSS grid — days | time | room — `whitespace-nowrap`,
-  `tabular-nums`, so lines align within and across meetings.
+- The cell is a 4-column CSS grid — days | time | room | dates — `whitespace-nowrap`,
+  `tabular-nums`, so every part of a meeting sits on one line and lines align
+  within the cell.
+- Meetings with a set time come first (Banner order), then meetings with none.
 - Time range shares the meridiem when both ends match (`9:00–10:15 AM`),
   otherwise `11:30 AM–12:45 PM`. New formatter in `src/lib/meetingTime.ts`;
   existing formatters (used by the dialog) stay.
 - Meeting with no time:
-  - online (building `ONLINE`): the room label spans the days+time columns,
-    muted (`Online async`).
-  - otherwise: time column shows `TBA`, room as usual.
-- Room label:
-  - building `ONLINE` → `Online` + room, where `ASYNC`/`SYNC` are lowercased
-    (`Online async`, `Online sync`), other room codes verbatim (`Online TBA`,
-    `Online WWW`), empty room → `Online`.
-  - anything else → `building room` as today (`LCCW ONLINE`, `FLEX SYNC` left
-    as Banner gives them); no building → `—`.
+  - online (building `ONLINE`): days empty, time column a muted `—`.
+  - otherwise: time column shows `TBA` (time not announced yet).
+- Room label: Banner's `BUILDING ROOM` verbatim, uppercase like every other
+  room (`POST 318A`, `ONLINE ASYNC`, `ONLINE SYNC`, `ONLINE TBA`, `ONLINE`);
+  no building → `—`. (Revised 2026-11-25: an earlier "Online Async" title-case
+  label read as a separate kind of thing.)
 - No meetings at all → `TBA` (as today).
 
-### Date lines
+### Dates
 
-- Under a meeting, a full-width muted small line `Jul 6 – Aug 14` (format
-  `MMM D – MMM D`, both ends always shown, so a one-day meeting reads
-  `Jul 6 – Jul 6`).
+- The 4th column of a meeting's line: a muted calendar icon + `Jul 7 – Aug 14`,
+  or `Sep 2 only` for a one-day meeting. (Revised 2026-11-25: dates were first
+  drawn as a line *under* the meeting, which read as floating/unattached; on
+  the same line they can't belong to another meeting.)
 - Shown when the meeting's `(startDate, endDate)` differs from the term's
   **usual date range**, or when the term has no usual range.
 - **Usual date range** = the most common `(begin_date, end_date)` among the

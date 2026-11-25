@@ -53,17 +53,16 @@ export function isOnlineMeeting(mt: MeetingTime): boolean {
   return mt.building?.trim().toUpperCase() === "ONLINE";
 }
 
-const ONLINE_ROOM_LABEL: Record<string, string> = { ASYNC: "Async", SYNC: "Sync" };
-
-/** `Online Async` / `Online Sync` / `Online TBA` / `Online`; else `BUILDING ROOM`. */
+/** Banner's `BUILDING ROOM` verbatim (`POST 318A`, `ONLINE ASYNC`); `—` when none. */
 export function formatMeetingLocation(mt: MeetingTime): string {
-  const room = mt.room?.trim() ?? "";
-  if (isOnlineMeeting(mt)) {
-    if (!room) return "Online";
-    return `Online ${ONLINE_ROOM_LABEL[room.toUpperCase()] ?? room}`;
-  }
   if (!mt.building) return "—";
-  return `${mt.building} ${room}`.trim();
+  return `${mt.building} ${mt.room ?? ""}`.trim();
+}
+
+/** Meetings with a set time first, then the rest (async/TBA); stable otherwise. */
+export function orderMeetings(meetings: MeetingTime[]): MeetingTime[] {
+  const hasTime = (mt: MeetingTime) => Boolean(mt.beginTime || mt.endTime);
+  return [...meetings.filter(hasTime), ...meetings.filter((mt) => !hasTime(mt))];
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -76,8 +75,9 @@ function formatShortDate(mmddyyyy: string): string {
   return month && !isNaN(day) ? `${month} ${day}` : mmddyyyy;
 }
 
-/** `Jul 6 – Aug 14`; both ends always shown, so a one-day meeting is `Jul 6 – Jul 6`. */
+/** `Jul 6 – Aug 14`, or `Jul 6 only` for a one-day meeting. */
 export function formatDateRange(start: string, end: string): string {
+  if (start === end) return `${formatShortDate(start)} only`;
   return `${formatShortDate(start)} – ${formatShortDate(end)}`;
 }
 

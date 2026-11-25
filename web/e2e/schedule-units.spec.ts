@@ -6,6 +6,7 @@ import {
   formatDateRange,
   formatMeetingLocation,
   formatTimeRange,
+  orderMeetings,
   shouldShowMeetingDates,
 } from "../src/lib/meetingTime";
 import type { MeetingTime } from "../src/lib/sis/types";
@@ -54,11 +55,11 @@ test("formatTimeRange shares the meridiem", () => {
 });
 
 test("formatMeetingLocation labels online rooms", () => {
-  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "ASYNC" }))).toBe("Online Async");
-  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "SYNC" }))).toBe("Online Sync");
-  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "TBA" }))).toBe("Online TBA");
-  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "WWW" }))).toBe("Online WWW");
-  expect(formatMeetingLocation(mt({ building: "ONLINE", room: null }))).toBe("Online");
+  // Banner's own uppercase codes, verbatim (matches every other room).
+  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "ASYNC" }))).toBe("ONLINE ASYNC");
+  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "SYNC" }))).toBe("ONLINE SYNC");
+  expect(formatMeetingLocation(mt({ building: "ONLINE", room: "TBA" }))).toBe("ONLINE TBA");
+  expect(formatMeetingLocation(mt({ building: "ONLINE", room: null }))).toBe("ONLINE");
   expect(formatMeetingLocation(mt({ building: "LCCW", room: "ONLINE" }))).toBe("LCCW ONLINE");
   expect(formatMeetingLocation(mt({ building: "POST", room: "318A" }))).toBe("POST 318A");
   expect(formatMeetingLocation(mt({ building: null, room: null }))).toBe("—");
@@ -66,7 +67,15 @@ test("formatMeetingLocation labels online rooms", () => {
 
 test("formatDateRange", () => {
   expect(formatDateRange("07/06/2026", "08/14/2026")).toBe("Jul 6 – Aug 14");
-  expect(formatDateRange("07/06/2026", "07/06/2026")).toBe("Jul 6 – Jul 6");
+  expect(formatDateRange("07/06/2026", "07/06/2026")).toBe("Jul 6 only");
+});
+
+test("orderMeetings puts meetings with no set time last, otherwise keeps Banner's order", () => {
+  const async = mt({ building: "ONLINE", room: "ASYNC" });
+  const mwf = mt({ beginTime: "1030", endTime: "1120", monday: true });
+  const tue = mt({ beginTime: "1800", endTime: "1950", tuesday: true });
+  expect(orderMeetings([mwf, async, tue])).toEqual([mwf, tue, async]);
+  expect(orderMeetings([async, mwf])).toEqual([mwf, async]);
 });
 
 test("shouldShowMeetingDates", () => {
