@@ -1,3 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <text y=".9em" font-size="90">📚</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <style>
+    .ink { stroke: #020817; }
+    .water { fill: #0f766e; }
+    @media (prefers-color-scheme: dark) {
+      .ink { stroke: #f8fafc; }
+      .water { fill: #2dd4bf; }
+    }
+  </style>
+  <defs>
+    <clipPath id="lens"><circle cx="13.5" cy="13.5" r="8.4"/></clipPath>
+  </defs>
+  <g clip-path="url(#lens)">
+    <path class="water" d="M3 15 q2.5 -2.6 5 0 t5 0 t5 0 t5 0 V25 H3 Z"/>
+  </g>
+  <circle class="ink" cx="13.5" cy="13.5" r="9.6" stroke-width="2.6"/>
+  <path class="ink" d="M20.6 20.6 L28 28" stroke-width="3.4" stroke-linecap="round"/>
 </svg>
