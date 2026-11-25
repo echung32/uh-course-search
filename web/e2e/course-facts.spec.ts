@@ -298,3 +298,19 @@ test("parity reports a mismatched description", async () => {
   expect(r.pass).toBe(false);
   expect(r.fields.description.examples[0].stored).toBe("X");
 });
+
+test("parity ignores cross-list rows that were never fetched", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  // 10003 never fetched, with a value that disagrees with crseavail (which has none).
+  f.raw
+    .prepare("UPDATE section_detail SET cross_list_crns = '[\"99999\"]', crosslist_synced_at = NULL WHERE term = ? AND crn = '10003'")
+    .run(TERM);
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.crossListFailed).toBe(false);
+  expect(r.fields.crossList.compared).toBeGreaterThan(0);
+  expect(r.fields.crossList.rate).toBe(1);
+  expect(r.pass).toBe(true);
+});

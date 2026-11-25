@@ -29,6 +29,8 @@ export interface ParityReport {
   fields: Record<ParityField, ParityFieldReport>;
   /** Units whose crseavail fetch failed (or whose campus has no code); skipped. */
   unitsFailed: number;
+  /** True when the crseavail cross-list fetch failed (crossList then has compared 0). */
+  crossListFailed: boolean;
   pass: boolean;
 }
 
@@ -122,11 +124,13 @@ export async function crseavailParity(
     }
   }
 
-  // Cross-lists are term-wide: one fetch, every stored section_detail row compared.
+  // Cross-lists are term-wide: one fetch; only rows whose cross-list was fetched
+  // (crosslist_synced_at set) are compared, NULL cross_list_crns meaning [].
+  let crossListFailed = false;
   try {
     const rows = await caCrossList(term);
     const { results: det } = await db
-      .prepare("SELECT crn, cross_list_crns FROM section_detail WHERE term = ?")
+      .prepare("SELECT crn, cross_list_crns FROM section_detail WHERE term = ? AND crosslist_synced_at IS NOT NULL")
       .bind(term)
       .all<{ crn: string; cross_list_crns: string | null }>();
     const map = crossListMap(rows, [...index.keys()]);
@@ -137,10 +141,11 @@ export async function crseavailParity(
       record("crossList", d.crn, s, c, JSON.stringify(s) === JSON.stringify(c));
     }
   } catch (err) {
+    crossListFailed = true;
     log(`[${term}] parity cross-list: crseavail failed, skipped: ${(err as Error).message}`);
   }
 
   for (const f of FIELDS) fields[f].rate = fields[f].compared ? fields[f].equal / fields[f].compared : 1;
   const pass = unitsOk > 0 && FIELDS.every((f) => fields[f].compared === 0 || fields[f].rate >= PASS_RATE);
-  return { term, fields, unitsFailed, pass };
+  return { term, fields, unitsFailed, crossListFailed, pass };
 }
