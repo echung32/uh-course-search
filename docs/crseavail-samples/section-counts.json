@@ -1,0 +1,43 @@
+[
+ {
+  "totCreditHrs": 148,
+  "gradableInd": "Y",
+  "waitCapacity": 15,
+  "subjCode": "ICS",
+  "seatsAvail": 20,
+  "enrl": 38,
+  "maxEnrl": 58,
+  "crseNumb": "3110",
+  "prntInd": "Y",
+  "voiceAvail": "Y",
+  "ptrmCode": "MAN",
+  "campCode": "MAN",
+  "sstsCode": "A",
+  "waitAvail": 15,
+  "seqNumb": "001",
+  "waitCount": 0,
+  "crn": "77062",
+  "termCode": "202710"
+ },
+ {
+  "totCreditHrs": 48,
+  "gradableInd": "Y",
+  "waitCapacity": 10,
+  "subjCode": "ICS",
+  "seatsAvail": 4,
+  "enrl": 16,
+  "maxEnrl": 20,
+  "crseNumb": "3900",
+  "prntInd": "Y",
+  "voiceAvail": "Y",
+  "ptrmCode": "MAN",
+  "campCode": "MAN",
+  "saprCode": "I",
+  "sstsCode": "A",
+  "waitAvail": 10,
+  "seqNumb": "001",
+  "waitCount": 0,
+  "crn": "71367",
+  "termCode": "202710"
+ }
+]
