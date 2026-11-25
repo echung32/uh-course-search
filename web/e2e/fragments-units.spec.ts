@@ -1,6 +1,7 @@
 // Node-only unit tests for the per-fragment DB writers and migration 0015.
 import { test, expect } from "@playwright/test";
 import { freshSearchDb, type FreshSearchDb } from "./sqlite-fixture";
+import type { D1Like } from "../src/lib/db/types";
 import {
   upsertSectionRestrictions,
   upsertSectionExtras,
@@ -251,4 +252,47 @@ test("captureDeadline cuts at 21:45 HST", async () => {
   expect(captureDeadline(late, 180)).toBe(late + 180 * MIN);
   const cut = at("2026-11-25T21:45:00-10:00");
   expect(captureDeadline(cut, 30)).toBe(cut + 30 * MIN);
+});
+
+test("captureTerm finishes its sync_run as error when it throws", async () => {
+  const saved = process.env.SIS_BASE_URL;
+  process.env.SIS_BASE_URL = `${MOCK}/StudentRegistrationSsb`;
+  const { captureTerm } = await import("../src/lib/ingest/capture");
+  if (saved === undefined) delete process.env.SIS_BASE_URL;
+  else process.env.SIS_BASE_URL = saved;
+
+  f = freshSearchDb();
+  insertSection("1"); // gaps: 3 section fragments + prereqs (facts stamped below)
+  f.raw
+    .prepare(
+      `INSERT INTO course (term, campus_description, subject, course_number, facts_synced_at, synced_at)
+       VALUES (?, '', 'ICS', '111', 1, 1)`
+    )
+    .run(TERM);
+  // The deadline is already past, so no step fetches anything; the closing gap
+  // count (the second gap query) is what throws — after every step has run.
+  let gapQueries = 0;
+  const failing: D1Like = {
+    prepare: (sql) => {
+      if (sql.includes("sd.restrictions_synced_at IS NULL AS r") && ++gapQueries === 2) {
+        throw new Error("boom: closing gap count");
+      }
+      return f.db.prepare(sql);
+    },
+    batch: (stmts) => f.db.batch(stmts),
+  };
+
+  await expect(captureTerm(failing, TERM, { deadline: Date.now() - 1, delayMs: 0 })).rejects.toThrow(
+    "boom: closing gap count"
+  );
+  const runs = f.raw
+    .prepare("SELECT status, finished_at, error_message, notes FROM sync_run WHERE term = ? AND kind = 'capture'")
+    .all(TERM) as Array<{ status: string | null; finished_at: number | null; error_message: string | null; notes: string }>;
+  expect(runs).toHaveLength(1);
+  expect(runs[0].status).toBe("error");
+  expect(runs[0].finished_at).not.toBeNull();
+  expect(runs[0].error_message).toContain("boom: closing gap count");
+  // No `progress` in the notes, so the zero-progress skip can't fire on it.
+  expect(JSON.parse(runs[0].notes)).toMatchObject({ gapsBefore: 4 });
+  expect(JSON.parse(runs[0].notes).progress).toBeUndefined();
 });

@@ -68,6 +68,10 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
   let crseavail: CourseFactsResult["source"] = crseavailEnabled() ? "crseavail" : "off";
   let unitsFallback = 0;
   let crosslist = "skipped";
+  let gapsAfter = gapsBefore;
+  let progress = 0;
+  let status: CaptureResult["status"] = "partial";
+  let stoppedEarly = false;
   try {
     // 1. Filter menus, only for a term that has none yet (10 Banner calls).
     //    Not a gap: a failure here is logged and the capture carries on.
@@ -102,26 +106,32 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
       const courses = gaps.prereqs.filter((k) => !noRow.has(ck(k)));
       if (courses.length > 0) await fetchCoursePrereqs(db, term, courses, fetchOpts);
     }
-  } catch (err) {
+
+    gapsAfter = gapCount(await getTermGaps(db, term));
+    progress = gapsBefore - gapsAfter;
+    status = gapsAfter === 0 ? "ok" : "partial";
+    stoppedEarly = gapsAfter > 0 && past();
     await finishSyncRun(db, run, {
       finishedAt: Date.now(),
-      status: "error",
-      errorMessage: (err as Error).message,
-      notes: JSON.stringify({ gapsBefore, crseavail, unitsFallback, crosslist }),
+      status,
+      sectionsUpserted: progress,
+      notes: JSON.stringify({ gapsBefore, gapsAfter, progress, crseavail, unitsFallback, crosslist, stoppedEarly }),
     });
+  } catch (err) {
+    // Never leave the run unfinished: record the error, then let it propagate.
+    // (The notes carry no `progress`, so this run never triggers the zero-progress skip.)
+    try {
+      await finishSyncRun(db, run, {
+        finishedAt: Date.now(),
+        status: "error",
+        errorMessage: (err as Error).message,
+        notes: JSON.stringify({ gapsBefore, crseavail, unitsFallback, crosslist }),
+      });
+    } catch (finishErr) {
+      log(`[capture] ${term}: could not record the error run: ${(finishErr as Error).message}`);
+    }
     throw err;
   }
-
-  const gapsAfter = gapCount(await getTermGaps(db, term));
-  const progress = gapsBefore - gapsAfter;
-  const status = gapsAfter === 0 ? "ok" : "partial";
-  const stoppedEarly = gapsAfter > 0 && past();
-  await finishSyncRun(db, run, {
-    finishedAt: Date.now(),
-    status,
-    sectionsUpserted: progress,
-    notes: JSON.stringify({ gapsBefore, gapsAfter, progress, crseavail, unitsFallback, crosslist, stoppedEarly }),
-  });
   log(
     `[capture] ${term}: ${status} gaps ${gapsBefore} → ${gapsAfter} (progress ${progress})` +
       (stoppedEarly ? " — stopped at the deadline" : "")
