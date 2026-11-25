@@ -1,0 +1,22 @@
+---
+// Brand lockup: a search lens with the ocean inside it + the "UH Course Search"
+// wordmark. The lens outline follows the text color (currentColor) and the water
+// uses the theme's --brand token, so it adapts to light/dark automatically.
+// The wordmark collapses to the mark alone on narrow screens.
+---
+
+<a href="/" aria-label="UH Course Search home" class="flex items-center gap-2 rounded-md">
+  <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" class="size-7 shrink-0">
+    <defs>
+      <clipPath id="uhcs-logo-lens"><circle cx="13.5" cy="13.5" r="8.4"></circle></clipPath>
+    </defs>
+    <g clip-path="url(#uhcs-logo-lens)">
+      <path d="M3 15 q2.5 -2.6 5 0 t5 0 t5 0 t5 0 V25 H3 Z" class="fill-brand"></path>
+    </g>
+    <circle cx="13.5" cy="13.5" r="9.6" stroke="currentColor" stroke-width="2.6"></circle>
+    <path d="M20.6 20.6 L28 28" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"></path>
+  </svg>
+  <span class="hidden text-lg font-semibold tracking-tight sm:inline">
+    <span class="text-brand">UH</span> Course Search
+  </span>
+</a>

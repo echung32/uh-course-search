@@ -42,10 +42,13 @@ export async function runSearch(
   meta?: TermSyncMeta | null
 ): Promise<SearchResultsResponse> {
   const resolvedMeta = meta !== undefined ? meta : await fetchTermSyncMeta(params.term);
-  const viaPageCache = await ensureSearchPage(getDb(), params);
+  // Hand the meta down: re-reading it inside would be a second, identical
+  // gateway round-trip on every search.
+  const viaPageCache = await ensureSearchPage(getDb(), params, resolvedMeta);
   const results = viaPageCache
     ? await fetchSearchPage(params)
     : await fetchSearchResults(params);
+  results.usualDateRange = resolvedMeta?.usualDateRange ?? null;
   if (viaPageCache) {
     results.coverage = await fetchCoverageSummary(params, results.totalCount);
   } else if (results.totalCount > 0 && resolvedMeta?.lastSyncedAt != null) {

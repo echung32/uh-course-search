@@ -391,6 +391,26 @@ test.describe("gateway request budget", () => {
     check.close();
   });
 
+  test("searchSections reads COUNT + page in one gateway request", async () => {
+    const { insertSectionsAndChildren } = await import("../src/lib/db/upsert");
+    const { searchSections } = await import("../src/lib/db/queries");
+    const db = gatewayD1({ url: f.url, secret: SECRET, db: "search" });
+    await insertSectionsAndChildren(db, Array.from({ length: 50 }, (_, i) => realisticSection(i)) as never[], 1);
+    const before = f.calls();
+    const page = await searchSections(db, {
+      term: "202740",
+      subject: "",
+      campus: "MAN",
+      pageOffset: 25,
+      pageMaxSize: 10,
+    });
+    expect(f.calls() - before).toBe(1);
+    expect(page.totalCount).toBe(50);
+    expect(page.data.map((s) => s.courseReferenceNumber)).toEqual(
+      Array.from({ length: 10 }, (_, i) => String(50025 + i))
+    );
+  });
+
   test("getPrereqSubgraph needs O(depth) gateway requests on a branching graph", async () => {
     const { getPrereqSubgraph } = await import("../src/lib/db/prereqQueries");
     // ROOT100 needs 5 courses, each needing 3 more (5 + 15 = 20 prereq nodes);

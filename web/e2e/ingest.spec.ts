@@ -202,6 +202,19 @@ test("CRN search on a dynamic term fetches the section live, then from D1", asyn
   expect((await miss.json()).totalCount).toBe(0);
 });
 
+test("an uncached backfilled-term search costs two gateway round-trips", async ({ request }) => {
+  // Each gateway call is a tunnel round-trip (~20 ms in production, vs <1 ms of
+  // SQLite), so the read path's call count IS its latency. A backfilled search
+  // needs exactly: the term sync-meta read (the edge-cache key + path choice),
+  // then ONE batch carrying COUNT + page. The meta must not be re-read further
+  // down (ensureSearchPage) and COUNT/page must not go out separately.
+  // (EDGE_CACHE=0 in e2e, so every request takes the uncached path.)
+  await resetGatewayCount();
+  expect(await searchCount(request, { term: "202710", subject: "ICS" })).toBeGreaterThan(0);
+  const calls = await gatewayCount();
+  if (calls !== null) expect(calls).toBe(2);
+});
+
 test("page cache serves a dynamic term from Banner, then from D1", async ({ request }) => {
   // 202740 is seeded dynamic (last_synced_at NULL) with no sections. An
   // "All Subjects" search must fetch the whole-term page live from Banner (the

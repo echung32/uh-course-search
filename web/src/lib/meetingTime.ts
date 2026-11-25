@@ -1,4 +1,4 @@
-import type { MeetingTime } from "@/lib/sis/types";
+import type { DateRange, MeetingTime } from "@/lib/sis/types";
 
 // Shared meeting-time formatters used by both the results table and the
 // section-detail dialog header, so the rendering stays identical between them.
@@ -28,4 +28,68 @@ export function formatTime(hhmm: string | null): string {
 export function formatMeetingTime(mt: MeetingTime): string {
   if (!mt.beginTime && !mt.endTime) return "TBA";
   return `${formatDays(mt)} ${formatTime(mt.beginTime)}–${formatTime(mt.endTime)}`;
+}
+
+// ── Schedule column (results table) ─────────────────────────────────────────
+
+function meridiem(hhmm: string): "AM" | "PM" {
+  return parseInt(hhmm.slice(0, 2), 10) >= 12 ? "PM" : "AM";
+}
+
+/**
+ * `9:00–10:15 AM` when both ends share a meridiem, else `11:30 AM–12:45 PM`.
+ * Null when the meeting has no time at all (async / TBA).
+ */
+export function formatTimeRange(begin: string | null, end: string | null): string | null {
+  if (!begin && !end) return null;
+  if (begin && end && meridiem(begin) === meridiem(end)) {
+    return `${formatTime(begin).replace(/ [AP]M$/, "")}–${formatTime(end)}`;
+  }
+  return `${formatTime(begin)}–${formatTime(end)}`;
+}
+
+/** Banner's placeholder building for online meetings (room = ASYNC/SYNC/TBA/…). */
+export function isOnlineMeeting(mt: MeetingTime): boolean {
+  return mt.building?.trim().toUpperCase() === "ONLINE";
+}
+
+/** Banner's `BUILDING ROOM` verbatim (`POST 318A`, `ONLINE ASYNC`); `—` when none. */
+export function formatMeetingLocation(mt: MeetingTime): string {
+  if (!mt.building) return "—";
+  return `${mt.building} ${mt.room ?? ""}`.trim();
+}
+
+/** Meetings with a set time first, then the rest (async/TBA); stable otherwise. */
+export function orderMeetings(meetings: MeetingTime[]): MeetingTime[] {
+  const hasTime = (mt: MeetingTime) => Boolean(mt.beginTime || mt.endTime);
+  return [...meetings.filter(hasTime), ...meetings.filter((mt) => !hasTime(mt))];
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Banner `MM/DD/YYYY` → `Jul 6` (string split, no Date: no timezone drift). */
+function formatShortDate(mmddyyyy: string): string {
+  const [mm, dd] = mmddyyyy.split("/");
+  const month = MONTHS[parseInt(mm, 10) - 1];
+  const day = parseInt(dd, 10);
+  return month && !isNaN(day) ? `${month} ${day}` : mmddyyyy;
+}
+
+/** `Jul 6 – Aug 14`, or `Jul 6 only` for a one-day meeting. */
+export function formatDateRange(start: string, end: string): string {
+  if (start === end) return `${formatShortDate(start)} only`;
+  return `${formatShortDate(start)} – ${formatShortDate(end)}`;
+}
+
+/**
+ * A meeting gets a date line when it has both dates and they differ from the
+ * term's usual range — or when the term has none (or it's unknown).
+ */
+export function shouldShowMeetingDates(
+  mt: MeetingTime,
+  usual: DateRange | null | undefined
+): boolean {
+  if (!mt.startDate || !mt.endDate) return false;
+  if (!usual) return true;
+  return mt.startDate !== usual.start || mt.endDate !== usual.end;
 }

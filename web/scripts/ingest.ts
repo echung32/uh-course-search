@@ -19,6 +19,7 @@
  *   yarn ingest refresh-run [--term 202710] [--delayMs 200]
  *   yarn ingest backfill [--term 202700] [--delayMs 250] [--maxMinutes 180] [--dryRun]
  *   yarn ingest backfill-attributes [--term 202710] [--force]
+ *   yarn ingest usual-dates [--term 202710]
  *   yarn ingest rollups [--term 202710]
  *   yarn ingest prereqs [--term 202710]
  *   yarn ingest daily [--term 202710] [--delayMs 200]
@@ -41,6 +42,7 @@ import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
 import { computeAllRollups, computeTermRollups } from "@/lib/ingest/rollups";
 import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
 import { crseavailParity } from "@/lib/ingest/parity";
+import { refreshAllUsualDates, refreshTermUsualDates } from "@/lib/db/usualDates";
 
 type Flags = Record<string, string | boolean>;
 
@@ -148,6 +150,17 @@ async function main() {
       break;
     }
 
+    case "usual-dates": {
+      // One-time (and on-demand) fill of term.usual_start_date/usual_end_date
+      // for backfilled terms; successful syncs keep mutable terms current.
+      const terms =
+        typeof flags.term === "string"
+          ? [{ term: flags.term, range: await refreshTermUsualDates(db, flags.term) }]
+          : await refreshAllUsualDates(db);
+      console.log(JSON.stringify({ ok: true, terms }, null, 2));
+      break;
+    }
+
     case "backfill-attributes": {
       const result = await backfillAttributes(db, {
         term: typeof flags.term === "string" ? flags.term : undefined,
@@ -213,7 +226,7 @@ async function main() {
 
     default:
       console.error(
-        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|rollups|prereqs|daily> [flags]"
+        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|usual-dates|rollups|prereqs|daily> [flags]"
       );
       process.exit(1);
   }

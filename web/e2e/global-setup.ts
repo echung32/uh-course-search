@@ -140,6 +140,57 @@ SECTIONS[3].meetingsFaculty = [
   },
 ];
 
+// ICS 311 sec 001: three meetings for the Schedule column — an in-range weekly
+// lecture, an online-async component, and a one-day meeting outside the term's
+// usual range (08/25/2025–12/12/2025, set on term 202710 below), which alone
+// gets a date line.
+function fixtureMeeting(overrides: Record<string, unknown>) {
+  return {
+    bannerId: null,
+    category: null,
+    courseReferenceNumber: "10005",
+    displayName: null,
+    emailAddress: null,
+    primaryIndicator: false,
+    term: "202710",
+    meetingTime: {
+      beginTime: null,
+      endTime: null,
+      startDate: "08/25/2025",
+      endDate: "12/12/2025",
+      building: null,
+      buildingDescription: null,
+      campus: null,
+      campusDescription: null,
+      room: null,
+      creditHourSession: null,
+      hoursWeek: null,
+      meetingScheduleType: null,
+      meetingType: null,
+      meetingTypeDescription: "Lecture",
+      monday: false,
+      tuesday: false,
+      wednesday: false,
+      thursday: false,
+      friday: false,
+      saturday: false,
+      sunday: false,
+      ...overrides,
+    },
+  };
+}
+SECTIONS[4].meetingsFaculty = [
+  fixtureMeeting({
+    beginTime: "1030", endTime: "1120", building: "POST", room: "318A",
+    monday: true, wednesday: true, friday: true,
+  }),
+  fixtureMeeting({ building: "ONLINE", room: "ASYNC" }),
+  fixtureMeeting({
+    beginTime: "1800", endTime: "1950", building: "KELLER", room: "101",
+    startDate: "09/02/2025", endDate: "09/02/2025", tuesday: true,
+  }),
+];
+
 export default async function globalSetup() {
   // Ensure the local D1 file exists with the current schema (idempotent).
   execSync(
@@ -196,6 +247,12 @@ export default async function globalSetup() {
   // Negative display_order keeps it out of the read-path search tests' dropdown.
   // "(View Only)" in the description exercises the chart label trimming.
   term.run("202610", "Fall 2025 (View Only)", -10, SYNCED);
+  // The read-path term's usual meeting date range (normally computed after a
+  // sync; see src/lib/db/usualDates.ts) — matches SECTIONS[3]'s meeting, so only
+  // off-range meetings get a date line in the Schedule column.
+  db.exec(
+    "UPDATE term SET usual_start_date = '08/25/2025', usual_end_date = '12/12/2025' WHERE code = '202710'"
+  );
 
   const insert = db.prepare(
     `INSERT INTO course_section

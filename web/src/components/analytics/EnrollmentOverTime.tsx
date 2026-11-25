@@ -27,14 +27,14 @@ function aggregateByTerm(points: CourseTrendPoint[]): Array<{
   term: string;
   enrollment: number;
   capacity: number;
-  waitlist: number;
 }> {
-  const byTerm = new Map<string, { term: string; enrollment: number; capacity: number; waitlist: number }>();
+  // Waitlist is deliberately not plotted: summed per-section waitlists
+  // double-count students who join several sections' lists.
+  const byTerm = new Map<string, { term: string; enrollment: number; capacity: number }>();
   for (const p of points) {
-    const cur = byTerm.get(p.term) ?? { term: p.term, enrollment: 0, capacity: 0, waitlist: 0 };
+    const cur = byTerm.get(p.term) ?? { term: p.term, enrollment: 0, capacity: 0 };
     cur.enrollment += p.enrollment;
     cur.capacity += p.capacity;
-    cur.waitlist += p.waitlist;
     byTerm.set(p.term, cur);
   }
   return [...byTerm.values()].sort((a, b) => a.term.localeCompare(b.term));
@@ -61,7 +61,6 @@ export function EnrollmentOverTime({
         <Legend />
         <Line type="monotone" dataKey="enrollment" name="Enrolled" stroke="#2563eb" strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="capacity" name="Capacity" stroke="#16a34a" strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="waitlist" name="Waitlist" stroke="#dc2626" strokeWidth={2} dot={false} />
       </LineChart>
     </ResponsiveContainer>
   );

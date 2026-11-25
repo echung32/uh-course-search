@@ -134,6 +134,11 @@ export interface SearchResultsResponse {
   pathMode: string | null;
   /** Present for page-cached (dynamic) and fully-backfilled terms alike. */
   coverage?: SearchCoverage;
+  /**
+   * The term's usual meeting date range: the Schedule column shows a meeting's
+   * dates only when they differ from it. null = none (every meeting shows dates).
+   */
+  usualDateRange?: DateRange | null;
 }
 
 /** One window, for the coverage grid (`/api/coverage`). */
@@ -185,4 +190,10 @@ export interface SearchParams {
   pageMaxSize: number;
   sortColumn?: string;
   sortDirection?: string;
+}
+
+/** An inclusive meeting date range, as Banner `MM/DD/YYYY` strings. */
+export interface DateRange {
+  start: string;
+  end: string;
 }

@@ -67,6 +67,46 @@ test("loads the course search page with a populated term", async ({ page }) => {
   await expect(page.locator("#term")).toContainText("Fall 2026");
 });
 
+test("a section stored without its nested lists still renders", async ({ page }) => {
+  // Fall 2024 (202690) is a backfill fixture whose one section is stored as a
+  // bare `{}` blob. The read path defaults the missing faculty/meeting/attribute
+  // lists, so the row renders instead of crashing the island.
+  await page.goto("/?term=202690");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+});
+
+test("a render error in the results is contained — the form survives", async ({
+  page,
+}) => {
+  // Bypass the server-side defaults with a stubbed malformed response, so the
+  // table itself throws; the boundary must keep the rest of the page alive.
+  await page.route("**/api/search?**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        totalCount: 1,
+        data: [{}],
+        pageOffset: 0,
+        pageMaxSize: 25,
+        sectionsFetchedCount: 1,
+        pathMode: "search",
+      }),
+    })
+  );
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText("couldn't be displayed");
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+
+  // A fresh (well-formed) search replaces the fallback with real results.
+  await page.unroute("**/api/search?**");
+  await pickCombobox(page, "subject", "ICS");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("subject is optional — omitting it searches all subjects", async ({ page }) => {
   // ICS only.
   await runSearch(page, "ICS", "");
@@ -120,22 +160,26 @@ test("subject search returns matching sections", async ({ page }) => {
 
 test("campus filter defaults to UH Manoa and widens to all campuses", async ({ page }) => {
   // Default campus is UH Manoa, so only the 6 Manoa ICS sections show — the
-  // Hilo section is hidden — and the column reflects it.
+  // Hilo section is hidden. With the search pinned to one campus the Campus
+  // column is redundant (every row would read "UHM"), so it's hidden.
   await runSearch(page, "ICS", "");
   expect(await totalSections(page)).toBe(6);
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toHaveCount(0);
   await expect(
-    page.getByRole("cell", { name: "UHM", exact: true }).first()
-  ).toBeVisible();
-  await expect(
-    page.getByRole("cell", { name: "UHH", exact: true })
+    page.getByRole("cell", { name: "UHM", exact: true })
   ).toHaveCount(0);
 
-  // Widen to all campuses → the Hilo section appears (7 total).
+  // Widen to all campuses → the Hilo section appears (7 total) and the Campus
+  // column returns to tell the rows apart.
   await selectCampus(page, "All Campuses");
   await runSearch(page, "ICS", "");
   await expect(page.getByText(/of 7 sections/)).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toBeVisible();
   await expect(
     page.getByRole("cell", { name: "UHH", exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "UHM", exact: true }).first()
   ).toBeVisible();
 });
 
@@ -287,6 +331,9 @@ test("CRN search returns the single matching section", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "10001", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "ICS 111" })).toHaveCount(1);
   await expect(page).toHaveURL(/[?&]crn=10001\b/);
+  // CRN mode ignores the (default Manoa) campus filter, so the row could be
+  // from any campus — the Campus column stays visible.
+  await expect(page.getByRole("columnheader", { name: "Campus" })).toBeVisible();
 
   // A CRN absent from the (backfilled) term yields no rows — no live call.
   await page.getByLabel("CRN").fill("99999");
@@ -403,6 +450,67 @@ test("course number filter narrows the results", async ({ page }) => {
 
   // Clearing the course number widens the results again.
   await runSearch(page, "ICS", "");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+});
+
+/** Records the given /api/search query param of every search request sent. */
+function recordSearchParam(page: Page, param: string): string[] {
+  const seen: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/api/search") seen.push(u.searchParams.get(param) ?? "");
+  });
+  return seen;
+}
+
+test("a filter change auto-searches without clicking Search", async ({ page }) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page).toHaveURL(/[?&]subject=ICS\b/);
+  expect(await totalSections(page)).toBe(6);
+});
+
+test("typing a course number auto-searches once complete and keeps focus", async ({
+  page,
+}) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page.getByText(/of 6 sections/)).toBeVisible();
+  const courseNumbers = recordSearchParam(page, "courseNumber");
+
+  const input = page.getByLabel("Course Number");
+  await input.pressSequentially("111", { delay: 50 });
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+  await expect(page).toHaveURL(/[?&]courseNumber=111\b/);
+  // The form isn't remounted by its own commit — the caret stays put.
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("111");
+  // Partial values ("1", "11") are exact-match dead ends and never hit the API.
+  expect(courseNumbers.filter((c) => c === "1" || c === "11")).toEqual([]);
+});
+
+test("a partial CRN doesn't auto-search; a complete one does", async ({ page }) => {
+  await expect(page.getByText(/of \d+ sections/)).toBeVisible();
+  const crns = recordSearchParam(page, "crn");
+
+  const input = page.getByLabel("CRN");
+  await input.pressSequentially("1000", { delay: 50 });
+  await page.waitForTimeout(800); // well past the debounce
+  expect(crns.filter(Boolean)).toEqual([]);
+
+  await input.pressSequentially("1");
+  await expect(page.getByText(/of 1 sections/)).toBeVisible();
+  expect(crns.filter(Boolean)).toEqual(["10001"]);
+});
+
+test("Back restores the previous search into the form", async ({ page }) => {
+  await pickCombobox(page, "subject", "ICS");
+  await expect(page).toHaveURL(/[?&]subject=ICS\b/);
+  await page.getByLabel("Course Number").pressSequentially("111", { delay: 50 });
+  await expect(page).toHaveURL(/[?&]courseNumber=111\b/);
+  await expect(page.getByText(/of 2 sections/)).toBeVisible();
+
+  await page.goBack();
+  await expect(page).not.toHaveURL(/courseNumber=/);
+  await expect(page.getByLabel("Course Number")).toHaveValue("");
   await expect(page.getByText(/of 6 sections/)).toBeVisible();
 });
 
@@ -593,3 +701,47 @@ test("does not prefetch the next page for a dynamic (un-backfilled) term", async
   await page.waitForTimeout(500);
   expect(offsets.filter((o) => o === 25).length).toBe(prefetchesBefore);
 });
+
+test("search responses carry the term's usualDateRange", async ({ request }) => {
+  const usual = { start: "08/25/2025", end: "12/12/2025" };
+  const search = await (await request.get("/api/search?term=202710&subject=ICS")).json();
+  expect(search.usualDateRange).toEqual(usual);
+  const crn = await (await request.get("/api/search?term=202710&crn=10004")).json();
+  expect(crn.usualDateRange).toEqual(usual);
+  // A term with no computed range reports null (→ every meeting shows its dates).
+  const none = await (await request.get("/api/search?term=202610&subject=ICS")).json();
+  expect(none.usualDateRange).toBeNull();
+});
+
+test("schedule column keeps each meeting's time and room together", async ({ page }) => {
+  await runSearch(page, "ICS", "");
+  await expect(page.getByRole("columnheader", { name: "Schedule" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Days/Times" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Location" })).toHaveCount(0);
+
+  // ICS 311 sec 001 (CRN 10005): Days | Time | Room | Dates are real table
+  // columns, one line per meeting; the no-set-time online meeting goes last.
+  const row = page.getByRole("row").filter({ hasText: "10005" });
+  const parts = (col: string) => row.getByTestId(`schedule-${col}`).getByTestId("meeting-part");
+  await expect(parts("days")).toHaveText(["MWF", "T", ""]);
+  await expect(parts("time")).toHaveText(["10:30–11:20 AM", "6:00–7:50 PM", "—"]);
+  await expect(parts("room")).toHaveText(["POST 318A", "KELLER 101", "ONLINE ASYNC"]);
+  // Only the off-range one-day meeting carries dates.
+  await expect(parts("dates")).toHaveText(["", "Sep 2 only", ""]);
+
+  // A meeting's parts share a baseline across the four columns…
+  for (let i = 0; i < 3; i++) {
+    const ys = await Promise.all(
+      ["days", "time", "room", "dates"].map(async (c) => (await parts(c).nth(i).boundingBox())!.y)
+    );
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1);
+  }
+  // …and every row's times start at the same x (shared table column).
+  const xOf = async (crn: string) =>
+    (await page.getByRole("row").filter({ hasText: crn }).getByTestId("schedule-time").boundingBox())!.x;
+  expect(await xOf("10004")).toBe(await xOf("10005"));
+
+  // ICS 211 (CRN 10004) meets on the usual dates → no date text at all.
+  await expect(page.getByRole("row").filter({ hasText: "10004" }).getByTestId("schedule-dates")).toHaveText("");
+});
+

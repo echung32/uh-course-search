@@ -22,19 +22,14 @@ export interface LeaderboardRow {
   fillRate: number;
 }
 
-export type LeaderboardMetric = "fillRate" | "waitlist";
-
 interface DemandDatum {
   label: string;
   fillPct: number;
-  waitlist: number;
+  enrollment: number;
+  capacity: number;
 }
 
-/**
- * Theme-aware tooltip showing BOTH metrics regardless of which bar is drawn.
- * Recharts only puts the rendered series in the default payload, so to surface
- * the inactive metric too we read the full row off `payload[0].payload`.
- */
+/** Theme-aware tooltip: fill rate plus the enrolled/capacity it's computed from. */
 function DemandTooltip({
   active,
   payload,
@@ -54,8 +49,10 @@ function DemandTooltip({
           <span className="ml-auto pl-3 font-medium tabular-nums">{row.fillPct}%</span>
         </li>
         <li className="flex items-center gap-2 text-popover-foreground">
-          <span className="text-muted-foreground">Waitlist</span>
-          <span className="ml-auto pl-3 font-medium tabular-nums">{row.waitlist}</span>
+          <span className="text-muted-foreground">Enrolled / capacity</span>
+          <span className="ml-auto pl-3 font-medium tabular-nums">
+            {row.enrollment} / {row.capacity}
+          </span>
         </li>
       </ul>
     </div>
@@ -63,30 +60,24 @@ function DemandTooltip({
 }
 
 /**
- * Horizontal leaderboard. Rows arrive pre-sorted by the active metric; the bar
- * shows that metric and the tooltip surfaces the other so context isn't lost
- * (a 100%-full course with a long waitlist reads either way).
+ * Horizontal fill-rate leaderboard. Rows arrive pre-sorted by fill rate. Waitlist
+ * is intentionally not shown: summed per-section waitlists double-count students
+ * who join several sections' lists (see getFillRateLeaderboard).
  */
-export function FillRateLeaderboard({
-  rows,
-  metric,
-}: {
-  rows: LeaderboardRow[];
-  metric: LeaderboardMetric;
-}) {
+export function FillRateLeaderboard({ rows }: { rows: LeaderboardRow[] }) {
   const data = React.useMemo<DemandDatum[]>(
     () =>
       rows.map((r) => ({
         label: r.subjectCourse ?? r.subject,
         fillPct: Math.round(r.fillRate * 1000) / 10,
-        waitlist: r.waitlist,
+        enrollment: r.enrollment,
+        capacity: r.capacity,
       })),
     [rows]
   );
-  const isWait = metric === "waitlist";
-  // Guard against an all-zero active metric: zero-width bars would otherwise
-  // render as an empty plot with axis labels but no "no data" cue.
-  const hasValues = data.some((d) => (isWait ? d.waitlist : d.fillPct) > 0);
+  // Guard against all-zero fill rates: zero-width bars would otherwise render as
+  // an empty plot with axis labels but no "no data" cue.
+  const hasValues = data.some((d) => d.fillPct > 0);
   if (data.length === 0 || !hasValues) {
     return <p className="text-sm text-muted-foreground">No data for this term.</p>;
   }
@@ -98,20 +89,10 @@ export function FillRateLeaderboard({
         margin={{ top: 8, right: 24, bottom: 8, left: 8 }}
       >
         <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
-        <XAxis
-          type="number"
-          domain={isWait ? [0, "auto"] : [0, 100]}
-          unit={isWait ? undefined : "%"}
-          allowDecimals={false}
-          fontSize={12}
-        />
+        <XAxis type="number" domain={[0, 100]} unit="%" allowDecimals={false} fontSize={12} />
         <YAxis type="category" dataKey="label" width={90} fontSize={12} />
         <Tooltip content={<DemandTooltip />} />
-        {isWait ? (
-          <Bar dataKey="waitlist" name="Waitlist" fill="#dc2626" radius={[0, 4, 4, 0]} />
-        ) : (
-          <Bar dataKey="fillPct" name="Fill rate" fill="#2563eb" radius={[0, 4, 4, 0]} />
-        )}
+        <Bar dataKey="fillPct" name="Fill rate" fill="#2563eb" radius={[0, 4, 4, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

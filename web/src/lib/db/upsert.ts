@@ -5,6 +5,7 @@
 import type { AutocompleteItem, CourseSection } from "@/lib/sis/types";
 import type { D1Like, D1PreparedStatement } from "./types";
 import type { RestrictionRule, Fee } from "@/lib/sis/parse/sectionDetail";
+import { refreshTermUsualDates } from "./usualDates";
 import {
   isViewOnly,
   sectionToAttributeRows,
@@ -613,6 +614,9 @@ export async function markTermSynced(
   // for a clean retry / served by the dynamic page cache) and preserves a
   // previously-`ok` term's timestamp if a later re-sync happens to go partial.
   // last_sync_status + section_count are still recorded for observability.
+  // The usual date range is refreshed first, so the edge-cache version (which
+  // includes it) changes in the same breath as last_synced_at.
+  if (status === "ok") await refreshTermUsualDates(db, term);
   await db
     .prepare(
       `UPDATE term SET
