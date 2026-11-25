@@ -1,0 +1,11 @@
+# supercronic schedule for the `cron` service (TZ=Pacific/Honolulu, cwd /app/web).
+# supercronic never starts a job while its previous run is still going.
+
+# Daily refresh at 22:00 HST — matches the old Workflow cron (08:00 UTC): a run
+# takes ~90 min and must finish before Banner's ~02:00 HST maintenance window.
+0 22 * * * yarn ingest daily
+
+# Nightly backups (VACUUM INTO /data/backups), after the refresh. Local retention
+# is BACKUP_KEEP_DAYS (default 14) — lower it when an offsite backup (restic etc.)
+# already keeps the history.
+0 4 * * * yarn db:backup --dir /data/backups --keepDays "${BACKUP_KEEP_DAYS:-14}"

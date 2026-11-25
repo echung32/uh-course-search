@@ -1,0 +1,23 @@
+.git
+.superpowers
+node_modules
+.yarn/cache
+.yarn/install-state.gz
+.yarn/unplugged
+.pnp.cjs
+.pnp.loader.mjs
+.venv
+# Local secrets must never enter the build context (they'd be baked into a layer).
+**/.env
+**/.env.*
+!**/.env.example
+**/.dev.vars
+**/.dev.vars.*
+web/.wrangler
+web/.wrangler-e2e
+web/.astro
+web/dist
+web/playwright-report
+web/test-results
+deploy/home/data
+discovery

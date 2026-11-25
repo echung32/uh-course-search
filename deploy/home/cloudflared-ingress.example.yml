@@ -1,0 +1,14 @@
+# Snippet for the HOST's cloudflared config (e.g. /etc/cloudflared/config.yml).
+# Add the uh-course-search rule above your existing catch-all. Replace
+# <gateway-host> with the hostname you route to this tunnel (a zone on your
+# Cloudflare account), e.g. `cloudflared tunnel route dns <tunnel> <gateway-host>`.
+#
+# Protect <gateway-host> with a Cloudflare Access self-hosted application whose
+# only policy is "Service Auth" for the Worker's service token — the Worker
+# sends CF-Access-Client-Id / CF-Access-Client-Secret on every request.
+
+ingress:
+  - hostname: <gateway-host>
+    service: http://127.0.0.1:8787
+  # ... your other rules ...
+  - service: http_status:404

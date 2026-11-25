@@ -5,7 +5,7 @@
  * D1's filter_option table. Returns [{ code, description }].
  */
 import type { APIRoute } from "astro";
-import { fetchTermSyncMeta } from "@/lib/search";
+import { readTermMeta } from "@/lib/api/termMeta";
 import { runFilterOptions } from "@/lib/api/filters";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import { FILTER_KINDS, type FilterKind } from "@/lib/db/queries";
@@ -49,7 +49,9 @@ export const GET: APIRoute = async ({ request }) => {
   // Menus for a backfilled term only change on (re)sync, so they're edge-cached
   // under the sync-versioned key. Dynamic terms stay uncached so the lazy
   // subject enumeration above keeps reaching D1/Banner.
-  const meta = await fetchTermSyncMeta(term);
+  const read = await readTermMeta(term);
+  if (!read.ok) return read.response;
+  const meta = read.meta;
   const profile = termCacheProfile(meta);
   const produce = () => handleFilters(term, kind as FilterKind, campus);
   return profile ? withEdgeCache(request, profile, produce) : produce();

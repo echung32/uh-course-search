@@ -2,8 +2,8 @@ import type { APIRoute } from "astro";
 import {
   fetchBackfillCoverageDetail,
   fetchCoverageDetail,
-  fetchTermSyncMeta,
 } from "@/lib/search";
+import { readTermMeta } from "@/lib/api/termMeta";
 import { termCacheProfile, withEdgeCache } from "@/lib/edgeCache";
 import type { SearchParams } from "@/lib/sis/types";
 
@@ -41,7 +41,9 @@ export const GET: APIRoute = async ({ request }) => {
     sortDirection: url.searchParams.get("sortDirection") ?? "asc",
   };
 
-  const meta = await fetchTermSyncMeta(term);
+  const read = await readTermMeta(term);
+  if (!read.ok) return read.response;
+  const meta = read.meta;
   const produce = async (): Promise<Response> => {
     try {
       const coverage =

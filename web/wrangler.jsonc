@@ -35,21 +35,22 @@
   // Subrequest budget raised to cover Tier A full sync across multiple terms
   // (default Worker limit is 1000; each term can require ~200-400 subrequests).
   "limits": { "subrequests": 50000 },
-  // Daily cron-triggered Workflow: refreshes all non-view-only terms once a day.
-  // schedules on the binding eliminates the need for a separate scheduled() handler.
-  // 08:00 UTC = 22:00 HST (10 PM, low-traffic); a full run is ~90 min, so it finishes
-  // (~23:30 HST) well before Banner's early-morning (~02:00 HST) maintenance window
-  // and a single daily fire never overlaps the next. (Was 12:00 UTC = 02:00 HST, but
-  // that landed inside the maintenance window: Banner served errors and the run threw.
-  // Was hourly before that, but a run legitimately exceeds an hour, so hourly fires
-  // piled up and re-synced the same terms concurrently — duplicate Banner load + D1
-  // writes.)
+  // RefreshWorkflow binding, kept UNSCHEDULED: the daily refresh now runs on the
+  // home server (`yarn ingest daily` from the compose `cron` service at 22:00 HST,
+  // see deploy/home/) because Free-plan Workers can't make the hundreds of
+  // Banner subrequests a sync step needs. History: the schedule was 08:00 UTC =
+  // 22:00 HST, chosen to finish before Banner's ~02:00 HST maintenance window and
+  // never overlap the next fire. Set `"schedules": ["0 8 * * *"]` to move the
+  // refresh back onto Workers (needs Workers Paid).
   "workflows": [
     {
       "binding": "REFRESH_WORKFLOW",
       "name": "uh-course-search-refresh",
-      "class_name": "RefreshWorkflow",
-      "schedules": ["0 8 * * *"]
+      "class_name": "RefreshWorkflow"
+      // No `schedules`. Wrangler rejects an empty array, and omitting the field
+      // may leave a previously deployed cron in place. So RefreshWorkflow.run
+      // also exits immediately while DB_GATEWAY_URL is set (refreshGuard.ts):
+      // a leftover cron can't double-refresh alongside the home cron.
     }
   ],
   // Cloudflare native Rate Limiting binding (GA) for the MCP server. Gates

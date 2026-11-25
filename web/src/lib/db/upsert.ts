@@ -89,20 +89,52 @@ export async function insertSectionsAndChildren(
   const meetingRows = sections.flatMap(sectionToMeetingRows);
   const attributeRows = sections.flatMap(sectionToAttributeRows);
 
-  for (const part of chunk(sectionRows, rowsPerChunk(SECTION_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "course_section", SECTION_COLUMNS, part)]);
-  }
-  for (const part of chunk(facultyRows, rowsPerChunk(FACULTY_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_faculty", FACULTY_COLUMNS, part)]);
-  }
-  for (const part of chunk(meetingRows, rowsPerChunk(MEETING_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_meeting", MEETING_COLUMNS, part)]);
-  }
-  for (const part of chunk(attributeRows, rowsPerChunk(ATTRIBUTE_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_attribute", ATTRIBUTE_COLUMNS, part)]);
-  }
+  // One batch for the whole write: on the home SQL gateway every batch() is one
+  // Worker subrequest (~50/invocation on Free) and one transaction. Statements
+  // stay chunked to the 100-param cap.
+  await db.batch([
+    ...chunk(sectionRows, rowsPerChunk(SECTION_COLUMNS.length)).map((part) =>
+      insertStatement(db, "course_section", SECTION_COLUMNS, part)),
+    ...childInsertStatements(db, facultyRows, meetingRows, attributeRows),
+  ]);
 
   return sectionRows.length;
+}
+
+/** Multi-row INSERTs for a set of sections' child rows, chunked to the param cap. */
+function childInsertStatements(
+  db: D1Like,
+  facultyRows: FacultyRow[],
+  meetingRows: MeetingRow[],
+  attributeRows: AttributeRow[]
+): D1PreparedStatement[] {
+  return [
+    ...chunk(facultyRows, rowsPerChunk(FACULTY_COLUMNS.length)).map((part) =>
+      insertStatement(db, "section_faculty", FACULTY_COLUMNS, part)),
+    ...chunk(meetingRows, rowsPerChunk(MEETING_COLUMNS.length)).map((part) =>
+      insertStatement(db, "section_meeting", MEETING_COLUMNS, part)),
+    ...chunk(attributeRows, rowsPerChunk(ATTRIBUTE_COLUMNS.length)).map((part) =>
+      insertStatement(db, "section_attribute", ATTRIBUTE_COLUMNS, part)),
+  ];
+}
+
+/** DELETEs of the given CRNs' child rows (and optionally the sections), ≤90 CRNs per IN-list. */
+function deleteStatements(
+  db: D1Like,
+  term: string,
+  crns: string[],
+  includeSections: boolean
+): D1PreparedStatement[] {
+  const tables = ["section_attribute", "section_faculty", "section_meeting"];
+  // Dropping a section also drops its detail row: D1 enforces FKs (ON DELETE
+  // CASCADE did this implicitly), the self-hosted SQLite runs with FKs off.
+  if (includeSections) tables.push("section_detail", "course_section");
+  return chunk(crns, 90).flatMap((part) => {
+    const inList = part.map(() => "?").join(",");
+    return tables.map((t) =>
+      db.prepare(`DELETE FROM ${t} WHERE term = ? AND crn IN (${inList})`).bind(term, ...part)
+    );
+  });
 }
 
 /**
@@ -118,26 +150,8 @@ export async function deleteSectionsAndChildren(
   crns: string[]
 ): Promise<number> {
   if (crns.length === 0) return 0;
-  let deleted = 0;
-  for (const part of chunk(crns, 90)) {
-    const inList = part.map(() => "?").join(",");
-    await db.batch([
-      db
-        .prepare(`DELETE FROM section_attribute WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-      db
-        .prepare(`DELETE FROM section_faculty WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-      db
-        .prepare(`DELETE FROM section_meeting WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-      db
-        .prepare(`DELETE FROM course_section WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-    ]);
-    deleted += part.length;
-  }
-  return deleted;
+  await db.batch(deleteStatements(db, term, crns, true));
+  return crns.length;
 }
 
 /**
@@ -242,34 +256,15 @@ export async function upsertSections(
   const attributeRows = sections.flatMap(sectionToAttributeRows);
 
   // Refresh child rows for just these CRNs (delete-then-insert; not relying on FK
-  // cascade, which D1/local differ on). Keep the IN-list under the 100-param cap.
-  for (const part of chunk(crns, 90)) {
-    const inList = part.map(() => "?").join(",");
-    await db.batch([
-      db
-        .prepare(`DELETE FROM section_attribute WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-      db
-        .prepare(`DELETE FROM section_faculty WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-      db
-        .prepare(`DELETE FROM section_meeting WHERE term = ? AND crn IN (${inList})`)
-        .bind(term, ...part),
-    ]);
-  }
-
-  for (const part of chunk(sectionRows, rowsPerChunk(SECTION_COLUMNS.length))) {
-    await db.batch([upsertSectionStatement(db, part)]);
-  }
-  for (const part of chunk(facultyRows, rowsPerChunk(FACULTY_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_faculty", FACULTY_COLUMNS, part)]);
-  }
-  for (const part of chunk(meetingRows, rowsPerChunk(MEETING_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_meeting", MEETING_COLUMNS, part)]);
-  }
-  for (const part of chunk(attributeRows, rowsPerChunk(ATTRIBUTE_COLUMNS.length))) {
-    await db.batch([insertStatement(db, "section_attribute", ATTRIBUTE_COLUMNS, part)]);
-  }
+  // cascade, which D1/local differ on), all in ONE batch: this runs on the user
+  // request path (page cache), where each gateway batch() is a Worker subrequest
+  // (~50/invocation on Free) — per-chunk batches cost ~45 for a 50-section window.
+  await db.batch([
+    ...deleteStatements(db, term, crns, false),
+    ...chunk(sectionRows, rowsPerChunk(SECTION_COLUMNS.length)).map((part) =>
+      upsertSectionStatement(db, part)),
+    ...childInsertStatements(db, facultyRows, meetingRows, attributeRows),
+  ]);
 
   return sectionRows.length;
 }

@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { findLocalD1File } from "./d1-helpers";
 
 // Exercises the Banner-facing ingestion path end-to-end: the admin sync route
@@ -23,6 +23,18 @@ async function searchCount(
   const res = await request.get("/api/search", { params });
   expect(res.ok()).toBeTruthy();
   return (await res.json()).totalCount as number;
+}
+
+// Gateway round-trip counter from e2e/gateway-server.ts; null when the suite
+// runs on the native D1 bindings (E2E_NATIVE_D1=1).
+const GATEWAY_COUNTER = "http://127.0.0.1:8789/count";
+async function resetGatewayCount(): Promise<void> {
+  if (process.env.E2E_NATIVE_D1 === "1") return;
+  await fetch(GATEWAY_COUNTER, { method: "DELETE" });
+}
+async function gatewayCount(): Promise<number | null> {
+  if (process.env.E2E_NATIVE_D1 === "1") return null;
+  return ((await (await fetch(GATEWAY_COUNTER)).json()) as { count: number }).count;
 }
 
 test.describe.configure({ mode: "serial" });
@@ -203,7 +215,13 @@ test("page cache serves a dynamic term from Banner, then from D1", async ({ requ
   // the page from the cache. This is the regression guard for the original bug:
   // a subject-less search on a not-yet-backfilled term returned nothing.
   const DYN = "202740";
+  await resetGatewayCount();
   expect(await searchCount(request, { term: DYN, pageMaxSize: "50" })).toBe(9); // 6 ICS + 3 MATH
+  // Every gateway round-trip is a Worker subrequest (~50/invocation on the Free
+  // plan, shared with the live Banner calls) — the heaviest request, a live
+  // page-cache fill, must stay well inside it.
+  const calls = await gatewayCount();
+  if (calls !== null) expect(calls).toBeLessThanOrEqual(30);
 
   // A subject-scoped page on the same dynamic term (a distinct cache key).
   expect(await searchCount(request, { term: DYN, subject: "ICS", pageMaxSize: "50" })).toBe(6);
@@ -493,6 +511,57 @@ test("admin rollups is idempotent across re-runs (upsert + delete-stale)", async
     ).length;
     expect(distinctStamps).toBe(1);
   } finally {
+    adb.close();
+  }
+});
+
+test("daily command refreshes, rolls up, and builds prereqs", () => {
+  // The home server's cron entry point: the RefreshWorkflow sequence run from
+  // the Node CLI straight against the SQLite files. Scoped to TERM so the
+  // read-path fixtures are untouched.
+  const started = Date.now();
+  const out = execFileSync("yarn", ["ingest", "daily", "--term", TERM, "--delayMs", "0"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      D1_MODE: "local",
+      SEARCH_D1_LOCAL_FILE: findLocalD1File("course_section"),
+      ANALYTICS_D1_LOCAL_FILE: findLocalD1File("course_term_stats"),
+      SIS_BASE_URL: "http://127.0.0.1:9999/StudentRegistrationSsb",
+      LOG_SOURCE: "0",
+    },
+  });
+  const result = JSON.parse(out.slice(out.indexOf("{")));
+  expect(result.ok).toBe(true);
+  expect(result.terms.map((t: { term: string }) => t.term)).toEqual([TERM]);
+  expect(result.rollups).toEqual([TERM]);
+  expect(Array.isArray(result.prereqs)).toBe(true);
+
+  const db = new DatabaseSync(findLocalD1File("course_section"), { enableForeignKeyConstraints: false });
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"));
+  try {
+    const run = db
+      .prepare("SELECT COUNT(*) AS n FROM sync_run WHERE term = ? AND started_at >= ?")
+      .get(TERM, started) as { n: number };
+    expect(run.n).toBeGreaterThan(0);
+    const stats = adb
+      .prepare("SELECT MAX(synced_at) AS s FROM course_term_stats WHERE term = ?")
+      .get(TERM) as { s: number | null };
+    expect(stats.s).toBeGreaterThanOrEqual(started);
+  } finally {
+    // This chromium-only spec shares D1 with the read-path specs the other
+    // browsers run afterwards: drop the TERM rollups (they would add courses to
+    // the analytics/prereq course pickers) and any prereq graph built for a term
+    // other than the read-path fixture's 202710.
+    for (const table of ["course_term_stats", "term_facet_stats", "term_meeting_stats"]) {
+      adb.prepare(`DELETE FROM ${table} WHERE term = ?`).run(TERM);
+    }
+    for (const t of (result.prereqs as Array<{ term: string }>).map((p) => p.term)) {
+      if (t === "202710") continue;
+      db.prepare("DELETE FROM course_prereq WHERE term = ?").run(t);
+      db.prepare("DELETE FROM prereq_edge WHERE term = ?").run(t);
+    }
+    db.close();
     adb.close();
   }
 });

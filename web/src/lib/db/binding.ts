@@ -1,10 +1,15 @@
 /**
- * Worker-side D1 access: the native `env.DB` binding.
+ * Worker-side DB access — the read path's only DB entry point.
  *
- * This is the read path's only D1 entry point. `import { env }` from
- * `cloudflare:workers` gives global access to bindings (works in `astro dev` via
- * platformProxy, in `wrangler dev`, and on the deployed Worker). The binding stub
- * is safe to read at module top-level — no I/O happens until a statement runs
+ * Two backends behind the same `D1Like` surface:
+ *   - the home SQL gateway (`gatewayD1`, over Cloudflare Tunnel + Access) when
+ *     `DB_GATEWAY_URL` is set — production since the move off D1 (see
+ *     docs/superpowers/specs/2026-11-24-home-backend-design.md);
+ *   - otherwise the native D1 bindings `env.DB` / `env.ANALYTICS_DB`.
+ *
+ * `import { env }` from `cloudflare:workers` gives global access to bindings and
+ * vars/secrets (works in `astro dev`, `wrangler dev`, and the deployed Worker).
+ * Safe to read at module top-level — no I/O happens until a statement runs
  * inside a request.
  *
  * Node ingestion uses a different entry point (`client.ts`'s `getDb`) so that the
@@ -12,9 +17,34 @@
  */
 import { env } from "cloudflare:workers";
 import type { D1Like } from "./types";
+import { gatewayD1 } from "./gatewayClient";
 import type { RateLimiter } from "@/lib/mcp/gate";
 
+type GatewayDb = "search" | "analytics";
+const gateways = new Map<GatewayDb, D1Like>();
+
+/** The gateway-backed client for `db`, or null when DB_GATEWAY_URL is unset. */
+function gatewayFor(db: GatewayDb): D1Like | null {
+  const e = env as Record<string, unknown>;
+  const url = e.DB_GATEWAY_URL;
+  if (typeof url !== "string" || url === "") return null;
+  let client = gateways.get(db);
+  if (!client) {
+    client = gatewayD1({
+      url,
+      db,
+      secret: String(e.DB_GATEWAY_SECRET ?? ""),
+      accessClientId: e.CF_ACCESS_CLIENT_ID as string | undefined,
+      accessClientSecret: e.CF_ACCESS_CLIENT_SECRET as string | undefined,
+    });
+    gateways.set(db, client);
+  }
+  return client;
+}
+
 export function getDb(): D1Like {
+  const gw = gatewayFor("search");
+  if (gw) return gw;
   const db = (env as { DB?: unknown }).DB;
   if (!db) throw new Error("D1 binding `DB` is not available on env");
   // The native D1Database implements prepare/bind/first/all/run/batch.
@@ -23,6 +53,8 @@ export function getDb(): D1Like {
 
 /** The analytics rollup database (uh-analytics-db). Read path only. */
 export function getAnalyticsDb(): D1Like {
+  const gw = gatewayFor("analytics");
+  if (gw) return gw;
   const db = (env as { ANALYTICS_DB?: unknown }).ANALYTICS_DB;
   if (!db) throw new Error("D1 binding `ANALYTICS_DB` is not available on env");
   return db as D1Like;

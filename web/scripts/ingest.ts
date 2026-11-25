@@ -20,6 +20,13 @@
  *   yarn ingest backfill [--term 202700] [--delayMs 250] [--dryRun]
  *   yarn ingest backfill-attributes [--term 202710] [--force]
  *   yarn ingest rollups [--term 202710]
+ *   yarn ingest prereqs [--term 202710]
+ *   yarn ingest daily [--term 202710] [--delayMs 200]
+ *
+ * `daily` is the home server's scheduled entry point (compose `cron` service):
+ * the RefreshWorkflow sequence — refresh the term list + every mutable term,
+ * recompute each refreshed term's analytics rollups, rebuild the primary
+ * prerequisite graph. Exits non-zero if any term's sync errored.
  */
 import { getDb, getAnalyticsDb } from "@/lib/db/client";
 import { refreshTerms } from "@/lib/ingest/terms";
@@ -28,7 +35,7 @@ import { syncDetails } from "@/lib/ingest/details";
 import { refreshMutableTerms } from "@/lib/ingest/refresh";
 import { backfillNextTerm } from "@/lib/ingest/backfill";
 import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
-import { computeAllRollups } from "@/lib/ingest/rollups";
+import { computeAllRollups, computeTermRollups } from "@/lib/ingest/rollups";
 import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
 
 type Flags = Record<string, string | boolean>;
@@ -165,9 +172,33 @@ async function main() {
       break;
     }
 
+    case "daily": {
+      const scoped = typeof flags.term === "string";
+      const refresh = await refreshMutableTerms(db, {
+        terms: scoped ? [flags.term as string] : undefined,
+        skipTermRefresh: scoped,
+        subjectDelayMs: num(flags.delayMs) ?? 200,
+        courseDelayMs: num(flags.delayMs) ?? 200,
+        log,
+      });
+      const analyticsDb = getAnalyticsDb();
+      const rollups: string[] = [];
+      for (const t of refresh.terms) {
+        await computeTermRollups(db, analyticsDb, t.term, Date.now());
+        rollups.push(t.term);
+      }
+      const prereqs = await buildAllPrereqGraphs(db, { log });
+      const failed = refresh.terms.filter((t) => t.syncStatus === "error").map((t) => t.term);
+      console.log(
+        JSON.stringify({ ok: failed.length === 0, failed, terms: refresh.terms, rollups, prereqs }, null, 2)
+      );
+      if (failed.length > 0) process.exitCode = 1;
+      break;
+    }
+
     default:
       console.error(
-        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|rollups|prereqs> [flags]"
+        "Usage: yarn ingest <refresh-terms|sync|sync-details|refresh-run|backfill|backfill-attributes|rollups|prereqs|daily> [flags]"
       );
       process.exit(1);
   }

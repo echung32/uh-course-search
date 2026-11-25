@@ -17,6 +17,13 @@ const ADMIN_SECRET = "e2e-admin-secret";
 // `.wrangler/state` the dev server reads — so a test run never clobbers the real
 // data developers keep locally. global-setup.ts hardcodes the same path.
 const E2E_PERSIST = ".wrangler-e2e";
+// The Worker reaches the DB through the home SQL gateway (production's path),
+// run here over the e2e files by e2e/gateway-server.ts. E2E_NATIVE_D1=1 skips
+// the gateway and serves from the native local D1 bindings instead.
+const NATIVE_D1 = process.env.E2E_NATIVE_D1 === "1";
+const GATEWAY_PORT = 8788;
+const GATEWAY_COUNTER_PORT = 8789;
+const GATEWAY_SECRET = "e2e-gateway-secret";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -43,12 +50,12 @@ export default defineConfig({
     {
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
     },
   ],
 
@@ -61,6 +68,21 @@ export default defineConfig({
       env: { MOCK_SIS_PORT: String(MOCK_SIS_PORT) },
       stdout: "pipe",
     },
+    ...(NATIVE_D1
+      ? []
+      : [
+          {
+            command: `yarn tsx e2e/gateway-server.ts`,
+            url: `http://127.0.0.1:${GATEWAY_PORT}/healthz`,
+            reuseExistingServer: !process.env.CI,
+            env: {
+              GATEWAY_PORT: String(GATEWAY_PORT),
+              GATEWAY_COUNTER_PORT: String(GATEWAY_COUNTER_PORT),
+              GATEWAY_SECRET,
+            },
+            stdout: "pipe" as const,
+          },
+        ]),
     {
       // Run the built Worker under wrangler dev (local D1 binding) — the same
       // artifact that deploys. Config reaches the Worker via `--var` (wrangler
@@ -81,7 +103,11 @@ export default defineConfig({
         ` --var SIS_BASE_URL:${SIS_BASE_URL}` +
         ` --var DYNAMIC_SYNC:1 --var COURSE_TEXT_LAZY:0 --var LOG_SOURCE:0` +
         ` --var INGEST_ON_WORKER:1 --var ADMIN_SECRET:${ADMIN_SECRET}` +
-        ` --var EDGE_CACHE:0`,
+        ` --var EDGE_CACHE:0` +
+        (NATIVE_D1
+          ? ""
+          : ` --var DB_GATEWAY_URL:http://127.0.0.1:${GATEWAY_PORT}` +
+            ` --var DB_GATEWAY_SECRET:${GATEWAY_SECRET}`),
       url: `http://127.0.0.1:${APP_PORT}`,
       reuseExistingServer: !process.env.CI,
       stdout: "pipe",
