@@ -41,10 +41,13 @@ redesign should cover:
 
 ### Schedule cell (`ResultsTable`)
 
-- Replaces the Days/Times and Location columns with one **Schedule** column.
-- The cell is a 4-column CSS grid — days | time | room | dates — `whitespace-nowrap`,
-  `tabular-nums`, so every part of a meeting sits on one line and lines align
-  within the cell.
+- Replaces the Days/Times and Location columns with one **Schedule** header
+  spanning four real table columns — Days | Time | Room | Dates — so every
+  row's times, rooms, and dates line up down the page. Each column renders one
+  fixed-height (`h-5`), no-wrap line per meeting, so a meeting's parts also
+  share a baseline across the four columns. (Revised 2026-11-25: a per-row
+  4-column CSS grid sized its tracks to each row's own text, so nothing lined
+  up across rows — worst with TBA / no-room rows.)
 - Meetings with a set time come first (Banner order), then meetings with none.
 - Time range shares the meridiem when both ends match (`9:00–10:15 AM`),
   otherwise `11:30 AM–12:45 PM`. New formatter in `src/lib/meetingTime.ts`;
@@ -60,7 +63,7 @@ redesign should cover:
 
 ### Dates
 
-- The 4th column of a meeting's line: a muted calendar icon + `Jul 7 – Aug 14`,
+- The Dates column, on the meeting's own line: a muted calendar icon + `Jul 7 – Aug 14`,
   or `Sep 2 only` for a one-day meeting. (Revised 2026-11-25: dates were first
   drawn as a line *under* the meeting, which read as floating/unattached; on
   the same line they can't belong to another meeting.)
