@@ -92,14 +92,15 @@ export interface CourseFactsOptions {
 }
 
 /**
- * Run-wide crseavail health (spec §3.2 "Banner-only for the rest of the run"):
- * one object per invocation, handed to every syncCourseFacts / syncCrossList of
- * every term, so a trip in one term keeps the later ones (and their cross-list
- * write) off crseavail too.
+ * Run-wide crseavail breaker (spec §3.2 "Banner-only for the rest of the run"):
+ * one object per invocation (newRunBreaker), handed to every syncCourseFacts /
+ * syncCrossList of every term. It carries the whole breaker state, not only the
+ * trip, so the preflight is the first unit of the RUN (a later term's first
+ * rejection is an ordinary one) and 5 consecutive rejections count across term
+ * boundaries; a trip keeps later terms (and their cross-list write) off crseavail.
  */
-export interface RunBreaker {
-  tripped: boolean;
-}
+export type RunBreaker = BreakerState;
+export const newRunBreaker = (): RunBreaker => ({ attempted: 0, consecutive: 0, tripped: false });
 
 interface TermCourse {
   key: CourseKey;
@@ -422,10 +423,13 @@ export async function syncCourseFacts(
       if (!names.has(k)) names.set(k, lookupNames(db, term, campus, coll, dept, crn, nameSession, log));
       return names.get(k)!;
     };
-    // A trip earlier in this invocation (another term) keeps crseavail off here too.
-    const runTripped = opts.runBreaker?.tripped ?? false;
-    let breaker: BreakerState = { attempted: 0, consecutive: 0, tripped: runTripped };
-    if (runTripped) {
+    // Continue the invocation's breaker (another term may have tripped it, or
+    // already used up the preflight); written back after every unit.
+    let breaker: BreakerState = opts.runBreaker ? { ...opts.runBreaker } : newRunBreaker();
+    const save = () => {
+      if (opts.runBreaker) Object.assign(opts.runBreaker, breaker);
+    };
+    if (breaker.tripped) {
       result.breakerTripped = true;
       log(`[${term}] course facts: breaker tripped earlier in this run; Banner-only`);
     }
@@ -462,9 +466,9 @@ export async function syncCourseFacts(
       if (typeof r === "string") reject(r);
       else toPool(r); // courses absent from an accepted response
       breaker = breakerStep(breaker, typeof r === "string" ? "rejected" : "accepted");
+      save();
       if (breaker.tripped) {
         result.breakerTripped = true;
-        if (opts.runBreaker) opts.runBreaker.tripped = true;
         log(`[${term}] course facts: breaker tripped after ${unitName} (${r}); Banner-only for the rest of the run`);
       }
     }

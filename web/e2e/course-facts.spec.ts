@@ -387,7 +387,7 @@ test("parity fails when every unit is empty, even if the cross-lists match", asy
 });
 
 test("a breaker tripped earlier in the run sends a later term's facts and cross-list straight to Banner", async () => {
-  const runBreaker = { tripped: false };
+  const runBreaker = cf.newRunBreaker();
   await setMode("html");
   const first = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0, runBreaker });
   expect(first.breakerTripped).toBe(true);
@@ -406,6 +406,34 @@ test("a breaker tripped earlier in the run sends a later term's facts and cross-
     [CA("course-grading")]: 0,
     [CA("crosslist")]: 0,
   });
+});
+
+// The fixture has one term, so "a later term" is another syncCourseFacts call
+// sharing the run's breaker (as refreshMutableTerms / backfillNextTerm do).
+test("run breaker: after an accepted unit, a later term's first rejection is not a preflight", async () => {
+  const runBreaker = cf.newRunBreaker();
+  const a = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker });
+  expect(a.breakerTripped).toBe(false);
+  await setMode("html", "ICS"); // ICS (the first unit) rejected, MATH fine
+  const b = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker });
+  expect(b.breakerTripped).toBe(false);
+  expect(b.rejections).toEqual({ "not-json": 1 });
+  expect(b.written).toBeGreaterThan(0); // MATH still came from crseavail
+  expect(runBreaker).toEqual({ attempted: 4, consecutive: 0, tripped: false });
+});
+
+test("run breaker: 5 consecutive rejections trip it across a term boundary", async () => {
+  const runBreaker = cf.newRunBreaker();
+  await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker }); // 2 accepted
+  await setMode("html");
+  const b = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker });
+  const c = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker });
+  expect([b.breakerTripped, c.breakerTripped]).toEqual([false, false]);
+  expect(runBreaker).toMatchObject({ consecutive: 4, tripped: false });
+  const d = await cf.syncCourseFacts(f.db, TERM, { mode: "all", delayMs: 0, runBreaker });
+  expect(d.breakerTripped).toBe(true); // its first unit is the 5th in a row
+  expect(d.rejections).toEqual({ "not-json": 1, breaker: 1 });
+  expect(runBreaker.tripped).toBe(true);
 });
 
 test("parity counts units with no campus code separately from failures", async () => {

@@ -15,6 +15,7 @@
 import type { D1Like } from "@/lib/db/types";
 import { listTermsWithGaps } from "@/lib/db/queries";
 import { captureTerm, type CaptureResult } from "./capture";
+import { newRunBreaker } from "./courseFacts";
 
 const DEFAULT_MAX_MINUTES = 180;
 const MINUTE_MS = 60_000;
@@ -107,7 +108,7 @@ export async function backfillNextTerm(
     );
   }
   // One crseavail breaker across every term of this invocation (spec §3.2).
-  const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log, runBreaker: { tripped: false } };
+  const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log, runBreaker: newRunBreaker() };
 
   const captures: CaptureResult[] = [];
   if (options.term) {

@@ -19,7 +19,13 @@ import type { D1Like } from "@/lib/db/types";
 import { refreshTerms } from "@/lib/ingest/terms";
 import { syncTerm } from "@/lib/ingest/sync";
 import { materializeCatalogFacets } from "@/lib/ingest/details";
-import { syncCourseFacts, notesFromFacts, type CourseFactsResult, type RunBreaker } from "@/lib/ingest/courseFacts";
+import {
+  newRunBreaker,
+  syncCourseFacts,
+  notesFromFacts,
+  type CourseFactsResult,
+  type RunBreaker,
+} from "@/lib/ingest/courseFacts";
 import { syncCrossList } from "@/lib/ingest/crossList";
 import { fetchCoursePrereqs, fetchExtras, fetchRestrictions } from "@/lib/ingest/fragments";
 import { crseavailEnabled } from "@/lib/crseavail/client";
@@ -203,7 +209,7 @@ export async function refreshTermDetails(
   const log = options.log ?? (() => {});
   const fetchOpts = { delayMs: options.courseDelayMs ?? 0, log };
   const caps = rollingCaps();
-  const runBreaker = options.runBreaker ?? { tripped: false };
+  const runBreaker = options.runBreaker ?? newRunBreaker();
 
   const out: DetailRefreshResult = {
     detailFetchedCrns: [],
@@ -378,7 +384,7 @@ export async function refreshMutableTerms(
   const terms: TermRefreshSummary[] = [];
   // One crseavail breaker for the whole invocation (spec §3.2: a trip means
   // Banner-only for the rest of the run, later terms included).
-  const runBreaker = options.runBreaker ?? { tripped: false };
+  const runBreaker = options.runBreaker ?? newRunBreaker();
   for (const code of codes) {
     terms.push(await refreshTerm(db, code, { ...options, runBreaker }));
   }

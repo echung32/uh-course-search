@@ -13,7 +13,7 @@ import type { D1Like } from "@/lib/db/types";
 import { gapCount, getTermGaps } from "@/lib/db/queries";
 import { finishSyncRun, startSyncRun } from "@/lib/db/upsert";
 import { FILTER_KINDS, materializeCatalogFacets, syncFilterOptions } from "./details";
-import { syncCourseFacts, type CourseFactsResult, type RunBreaker } from "./courseFacts";
+import { newRunBreaker, syncCourseFacts, type CourseFactsResult, type RunBreaker } from "./courseFacts";
 import { syncCrossList } from "./crossList";
 import { fetchCoursePrereqs, fetchExtras, fetchRestrictions } from "./fragments";
 
@@ -68,7 +68,7 @@ export async function captureTerm(db: D1Like, term: string, opts: CaptureOptions
   const { deadline, delayMs } = opts;
   const past = () => Date.now() > deadline;
   const fetchOpts = { delayMs, deadline, log };
-  const runBreaker = opts.runBreaker ?? { tripped: false };
+  const runBreaker = opts.runBreaker ?? newRunBreaker();
 
   const gaps = await getTermGaps(db, term);
   const gapsBefore = gapCount(gaps);
