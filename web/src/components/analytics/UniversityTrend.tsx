@@ -46,7 +46,7 @@ export function UniversityTrend({
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
           <XAxis dataKey="term" tickFormatter={termLabel} fontSize={12} />
           <YAxis fontSize={12} allowDecimals={false} />
-          <Tooltip content={<ChartTooltip labelFormatter={termLabel} />} />
+          <Tooltip content={<ChartTooltip labelFormatter={termLabel} sortByValue hideZero showTotal />} />
           {keys.map((k, i) => (
             <Area
               key={k}

@@ -46,6 +46,8 @@ export function DeliveryModeShift({
               <ChartTooltip
                 labelFormatter={termLabel}
                 valueFormatter={(v) => `${v.toFixed(1)}%`}
+                sortByValue
+                hideZero
               />
             }
           />
