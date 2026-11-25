@@ -89,17 +89,30 @@ test("upsertSectionCrossLists can set NULL and stamps crosslist_synced_at", asyn
   expect(r.crosslist_synced_at).toBe(300);
   const r1 = f.raw.prepare("SELECT cross_list_crns FROM section_detail WHERE crn = '1'").get() as Record<string, unknown>;
   expect(r1.cross_list_crns).toBe('["2"]');
+
+  // An existing non-NULL value may become NULL, but raw html is kept when omitted.
+  f.raw
+    .prepare(
+      `INSERT INTO section_detail (term, crn, cross_list_crns, raw_xlst_html, synced_at)
+       VALUES (?, '3', '["9"]', '<x/>', 1)`
+    )
+    .run(TERM);
+  await upsertSectionCrossLists(f.db, TERM, [{ crn: "3", crossListCrns: null }], 400);
+  const r3 = f.raw.prepare("SELECT * FROM section_detail WHERE crn = '3'").get() as Record<string, unknown>;
+  expect(r3.cross_list_crns).toBeNull();
+  expect(r3.raw_xlst_html).toBe("<x/>");
 });
 
 test("upsertCourseFacts never nulls description or touches prereqs", async () => {
   f = freshSearchDb();
   await upsertCourseFacts(f.db, key, { ...facts, description: "Desc" }, "banner", 50);
   await updateCoursePrereqs(f.db, key, { prerequisites: "P", corequisites: null, rawPrereqHtml: "<p>P</p>", rawCoreqHtml: null }, 60);
-  await upsertCourseFacts(f.db, key, facts, "crseavail", 70);
+  await upsertCourseFacts(f.db, key, { ...facts, collegeCode: null }, "crseavail", 70);
   const r = f.raw.prepare("SELECT * FROM course").get() as Record<string, unknown>;
   expect(r.description).toBe("Desc");
   expect(r.prerequisites).toBe("P");
   expect(r.prereq_synced_at).toBe(60);
+  expect(r.college_code).toBe("14");
   expect(r.facts_source).toBe("crseavail");
   expect(r.facts_synced_at).toBe(70);
 });

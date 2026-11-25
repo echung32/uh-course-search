@@ -669,7 +669,7 @@ export async function upsertSectionCrossLists(
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(term, crn) DO UPDATE SET
              cross_list_crns = excluded.cross_list_crns,
-             raw_xlst_html = excluded.raw_xlst_html,
+             raw_xlst_html = COALESCE(excluded.raw_xlst_html, section_detail.raw_xlst_html),
              crosslist_synced_at = excluded.crosslist_synced_at,
              synced_at = excluded.synced_at`
         )
@@ -695,10 +695,10 @@ export async function upsertCourseFacts(
           facts_source, synced_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(term, campus_description, subject, course_number) DO UPDATE SET
-         college_code = excluded.college_code,
-         college_name = excluded.college_name,
+         college_code = COALESCE(excluded.college_code, course.college_code),
+         college_name = COALESCE(excluded.college_name, course.college_name),
          department = excluded.department,
-         department_code = excluded.department_code,
+         department_code = COALESCE(excluded.department_code, course.department_code),
          grading_modes = excluded.grading_modes,
          schedule_types = excluded.schedule_types,
          credit_breakdown = excluded.credit_breakdown,
@@ -804,7 +804,7 @@ export async function upsertInstructor(
        ON CONFLICT(banner_id) DO UPDATE SET
          display_name = excluded.display_name,
          title = excluded.title,
-         department = excluded.department,
+         department = COALESCE(excluded.department, course.department),
          college = excluded.college,
          email = excluded.email,
          raw_json = excluded.raw_json,
