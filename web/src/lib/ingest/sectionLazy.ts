@@ -1,18 +1,18 @@
 /**
- * Lazy (cache-on-miss) section-detail fetch. The eager per-CRN pass in
- * `details.ts` is the heaviest ingest (6 Banner endpoints × every CRN), so the
- * read path instead fetches a section's detail the first time it's viewed and
- * stores it — subsequent views are pure D1 hits, and a section with no detail
- * still stores (all-null) once and never refetches.
+ * Lazy (cache-on-miss) section-detail fetch. Ingest fills `section_detail` in
+ * per-fragment groups (restrictions; extras = fees + linked + syllabus), each
+ * with its own freshness stamp. On view, only the groups still missing are
+ * fetched live, written with the per-fragment writers (never touching a group
+ * that wasn't requested), and the merged row is read back. Cross-list is never
+ * fetched on view — it comes from ingest.
  *
- * This is the ONE place a user request can reach the live Banner API (only for a
- * cold section_detail); search itself is always served from D1. The fallback is
- * invoked by the `/api/section` route, not by the read-path `search.ts`, so that
- * module stays Banner-free.
+ * Failure semantics: if every requested group fails, nothing is written and the
+ * result is null (the caller serves a stored partial row, or 404s). Extras are
+ * written only if fees + linked + syllabus all succeed. A live fetch needs a
+ * rate-limit slot (`lazyLimit`). Invoked by `/api/section`, not by `search.ts`.
  */
 import {
   establishSession,
-  getCrossListSections,
   getFees,
   getLinkedSections,
   getRestrictions,
@@ -25,9 +25,15 @@ import {
   parseSyllabus,
 } from "@/lib/sis/parse/sectionDetail";
 import type { D1Like } from "@/lib/db/types";
-import type { SectionDetail } from "@/lib/db/queries";
-import { upsertSectionDetail } from "@/lib/db/upsert";
+import { getSectionDetail, type SectionDetail } from "@/lib/db/queries";
+import { upsertSectionExtras, upsertSectionRestrictions } from "@/lib/db/upsert";
+import { tryTakeLazySlot } from "@/lib/ingest/lazyLimit";
 import { logSis } from "@/lib/log";
+
+export interface MissingFragments {
+  restrictions: boolean;
+  extras: boolean;
+}
 
 /** Concurrent first-views of the same section share one live fetch. */
 const inFlight = new Map<string, Promise<SectionDetail | null>>();
@@ -37,11 +43,7 @@ function lazyEnabled(): boolean {
 }
 
 /** True when a section actually exists for (term, crn) — bounds live fetches. */
-async function sectionExists(
-  db: D1Like,
-  term: string,
-  crn: string
-): Promise<boolean> {
+async function sectionExists(db: D1Like, term: string, crn: string): Promise<boolean> {
   const row = await db
     .prepare("SELECT 1 AS ok FROM course_section WHERE term = ? AND crn = ?")
     .bind(term, crn)
@@ -52,94 +54,98 @@ async function sectionExists(
 async function fetchAndStore(
   db: D1Like,
   term: string,
-  crn: string
+  crn: string,
+  missing: MissingFragments
 ): Promise<SectionDetail | null> {
-  logSis(`section detail ${term}:${crn} — live fetch (cache miss)`);
+  logSis(
+    `section detail ${term}:${crn} — live fetch (${[
+      missing.restrictions && "restrictions",
+      missing.extras && "extras",
+    ]
+      .filter(Boolean)
+      .join("+")})`
+  );
   const session = await establishSession(term);
-  // Per-fragment tolerance: Banner returns 500 for a CRN it doesn't recognize
-  // (e.g. a section that has since been cancelled), and any one fragment may
-  // fail transiently. `allSettled` keeps a single bad endpoint from sinking the
-  // whole panel. If EVERY fragment fails the section is unknown to Banner (or
-  // the session/IP is throttled), so we return null WITHOUT caching — the route
-  // 404s ("no detail") instead of 500ing, and a later view retries live rather
-  // than being stuck with a cached all-null row (the lazy path never refetches).
-  const settled = await Promise.allSettled([
-    getRestrictions(session, term, crn),
-    getFees(session, term, crn),
-    getCrossListSections(session, term, crn),
-    getLinkedSections(session, term, crn),
-    getSyllabus(session, term, crn),
-  ]);
-  if (settled.every((s) => s.status === "rejected")) {
+
+  const groups: Promise<boolean>[] = [];
+  if (missing.restrictions) {
+    groups.push(
+      getRestrictions(session, term, crn).then(
+        async (html) => {
+          await upsertSectionRestrictions(
+            db,
+            term,
+            crn,
+            { restrictions: parseRestrictions(html), rawHtml: html },
+            Date.now()
+          );
+          return true;
+        },
+        () => false
+      )
+    );
+  }
+  if (missing.extras) {
+    groups.push(
+      Promise.all([
+        getFees(session, term, crn),
+        getLinkedSections(session, term, crn),
+        getSyllabus(session, term, crn),
+      ]).then(
+        async ([fees, linked, syllabus]) => {
+          await upsertSectionExtras(
+            db,
+            term,
+            crn,
+            {
+              fees: parseFees(fees),
+              linkedCrns: parseSectionCrns(linked),
+              syllabus: parseSyllabus(syllabus),
+              rawFeesHtml: fees,
+              rawLinkedHtml: linked,
+              rawSyllabusHtml: syllabus,
+            },
+            Date.now()
+          );
+          return true;
+        },
+        () => false
+      )
+    );
+  }
+  const ok = await Promise.all(groups);
+  if (!ok.some(Boolean)) {
     console.warn(
-      `Section detail: all fragments failed for ${term}:${crn} (unknown CRN or throttled) — not caching`
+      `Section detail: all requested fragments failed for ${term}:${crn} (unknown CRN or throttled) — not caching`
     );
     return null;
   }
-  const raw = (i: number): string | null =>
-    settled[i].status === "fulfilled"
-      ? (settled[i] as PromiseFulfilledResult<string>).value
-      : null;
-  const restr = raw(0);
-  const fees = raw(1);
-  const xlst = raw(2);
-  const linked = raw(3);
-  const syllabus = raw(4);
-
-  const restrictions = restr ? parseRestrictions(restr) : null;
-  const parsedFees = fees ? parseFees(fees) : null;
-  const crossListCrns = xlst ? parseSectionCrns(xlst) : null;
-  const linkedCrns = linked ? parseSectionCrns(linked) : null;
-  const parsedSyllabus = syllabus ? parseSyllabus(syllabus) : null;
-
-  await upsertSectionDetail(
-    db,
-    term,
-    crn,
-    {
-      restrictions,
-      fees: parsedFees,
-      crossListCrns,
-      linkedCrns,
-      syllabus: parsedSyllabus,
-      rawRestrictionsHtml: restr,
-      rawFeesHtml: fees,
-      rawXlstHtml: xlst,
-      rawLinkedHtml: linked,
-      rawSyllabusHtml: syllabus,
-    },
-    Date.now()
-  );
-
-  return {
-    term,
-    crn,
-    restrictions,
-    fees: parsedFees,
-    crossListCrns,
-    linkedCrns,
-    syllabus: parsedSyllabus,
-  };
+  return getSectionDetail(db, term, crn);
 }
 
 /**
- * Fetches a section's detail live, stores it, and returns it — but only if the
- * section actually exists in D1 and lazy fetching is enabled. Returns `null`
- * otherwise (the route then 404s), so an unknown CRN never triggers a live call.
+ * Fetches the missing fragment groups live, stores them, and returns the merged
+ * detail — only if the section exists, lazy fetching is enabled and a rate-limit
+ * slot is free. Returns `null` otherwise.
  */
 export async function ensureSectionDetail(
   db: D1Like,
   term: string,
-  crn: string
+  crn: string,
+  missing: MissingFragments
 ): Promise<SectionDetail | null> {
   if (!lazyEnabled()) return null;
-  if (!(await sectionExists(db, term, crn))) return null;
+  if (!missing.restrictions && !missing.extras) return null;
 
-  const key = `${term}:${crn}`;
+  const key = `${term}:${crn}:${missing.restrictions ? "r" : ""}${missing.extras ? "e" : ""}`;
   const existing = inFlight.get(key);
   if (existing) return existing;
 
-  const promise = fetchAndStore(db, term, crn).finally(() => inFlight.delete(key));
+  const promise = (async () => {
+    if (!(await sectionExists(db, term, crn))) return null;
+    if (!tryTakeLazySlot()) return null;
+    return fetchAndStore(db, term, crn, missing);
+  })().finally(() => inFlight.delete(key));
   inFlight.set(key, promise);
   return promise;
 }

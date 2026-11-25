@@ -400,3 +400,60 @@ test("captureTerm finishes its sync_run as error when it throws", async () => {
   expect(JSON.parse(runs[0].notes)).toMatchObject({ gapsBefore: 4 });
   expect(JSON.parse(runs[0].notes).progress).toBeUndefined();
 });
+
+test("lazy slots cap at LAZY_FETCH_PER_MINUTE", async () => {
+  const prev = process.env.LAZY_FETCH_PER_MINUTE;
+  process.env.LAZY_FETCH_PER_MINUTE = "2";
+  try {
+    const { tryTakeLazySlot, __resetLazySlots } = await import("../src/lib/ingest/lazyLimit");
+    __resetLazySlots();
+    const t = 1_000_000;
+    expect(tryTakeLazySlot(t)).toBe(true);
+    expect(tryTakeLazySlot(t + 1)).toBe(true);
+    expect(tryTakeLazySlot(t + 2)).toBe(false);
+    expect(tryTakeLazySlot(t + 60_000)).toBe(true);
+  } finally {
+    if (prev === undefined) delete process.env.LAZY_FETCH_PER_MINUTE;
+    else process.env.LAZY_FETCH_PER_MINUTE = prev;
+  }
+});
+
+test.describe("lazy course text", () => {
+  const saved: Record<string, string | undefined> = {};
+  test.beforeAll(() => {
+    saved.SIS_BASE_URL = process.env.SIS_BASE_URL;
+    saved.COURSE_TEXT_LAZY = process.env.COURSE_TEXT_LAZY;
+    process.env.SIS_BASE_URL = `${MOCK}/StudentRegistrationSsb`;
+    delete process.env.COURSE_TEXT_LAZY;
+  });
+  test.afterAll(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  test("course panel fetches prereqs when description already present", async () => {
+    const { syncTerm } = await import("../src/lib/ingest/sync");
+    const { ensureCourseText } = await import("../src/lib/ingest/courseTextLazy");
+    const { __resetLazySlots } = await import("../src/lib/ingest/lazyLimit");
+    __resetLazySlots();
+    await fetch(`${MOCK}/__mock/reset`, { method: "POST" });
+    f = freshSearchDb();
+    expect((await syncTerm(f.db, FRAG_TERM, { subjectDelayMs: 0 })).status).toBe("ok");
+    const campus = "Manoa";
+    f.raw
+      .prepare(
+        `INSERT INTO course (term, campus_description, subject, course_number, description, raw_description_html, synced_at)
+         VALUES (?, ?, 'ICS', '111', 'Existing description', '<p/>', 1)`
+      )
+      .run(FRAG_TERM, campus);
+    const out = await ensureCourseText(f.db, FRAG_TERM, campus, "ICS", "111");
+    expect(out?.description).toBe("Existing description");
+    const row = f.raw
+      .prepare("SELECT description, prereq_synced_at FROM course WHERE term = ? AND subject = 'ICS' AND course_number = '111'")
+      .get(FRAG_TERM) as { description: string; prereq_synced_at: number | null };
+    expect(row.prereq_synced_at).not.toBeNull();
+    expect(row.description).toBe("Existing description");
+  });
+});

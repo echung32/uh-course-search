@@ -16,7 +16,7 @@ import {
   getFilterOptions,
   getInstructor,
   getSectionByCrn,
-  getSectionDetail,
+  getSectionDetailState,
   getSearchPageFromChunks,
   getSubjectFacet,
   getTermSyncMeta,
@@ -131,11 +131,11 @@ export async function fetchCourseCatalog(
   return getCourseCatalog(getDb(), term, campusDescription, subject, courseNumber);
 }
 
-export async function fetchSectionDetail(
+export async function fetchSectionDetailState(
   term: string,
   crn: string
-): Promise<SectionDetail | null> {
-  return getSectionDetail(getDb(), term, crn);
+) {
+  return getSectionDetailState(getDb(), term, crn);
 }
 
 export async function fetchInstructor(bannerId: string): Promise<Instructor | null> {

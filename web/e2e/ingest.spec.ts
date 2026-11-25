@@ -594,6 +594,31 @@ test("a zero-progress term is skipped", async ({ request }) => {
   }
 });
 
+test("section view fetches only missing extras", async ({ request }) => {
+  const sentinel = '[{"rule":"must","category":"Sentinel","values":[]}]';
+  const db = searchDb();
+  try {
+    db.prepare(
+      "UPDATE section_detail SET extras_synced_at = NULL, fees_json = NULL, restrictions_json = ? WHERE term = ? AND crn = '10002'"
+    ).run(sentinel, TERM);
+  } finally {
+    db.close();
+  }
+  const res = await request.get("/api/section", { params: { term: TERM, crn: "10002" } });
+  expect(res.status()).toBe(200);
+  expect(JSON.stringify((await res.json()).fees)).toContain("Course Fee");
+  const check = searchDb();
+  try {
+    const row = check
+      .prepare("SELECT restrictions_json, extras_synced_at FROM section_detail WHERE term = ? AND crn = '10002'")
+      .get(TERM) as { restrictions_json: string; extras_synced_at: number | null };
+    expect(row.restrictions_json).toContain("Sentinel");
+    expect(row.extras_synced_at).not.toBeNull();
+  } finally {
+    check.close();
+  }
+});
+
 test("backfill admin route requires the secret", async ({ request }) => {
   const res = await request.post("/api/admin/backfill?dryRun=1", {
     headers: { "content-type": "application/json" },

@@ -1060,3 +1060,24 @@ function normalizeChunkSort(params: SearchParams): {
       (params.sortDirection ?? "asc").toLowerCase() === "desc" ? "desc" : "asc",
   };
 }
+
+/** Section detail plus per-fragment-group freshness (null when no row exists). */
+export async function getSectionDetailState(
+  db: D1Like,
+  term: string,
+  crn: string
+): Promise<{
+  detail: SectionDetail;
+  restrictionsSyncedAt: number | null;
+  extrasSyncedAt: number | null;
+} | null> {
+  const detail = await getSectionDetail(db, term, crn);
+  if (!detail) return null;
+  const st = await db
+    .prepare(
+      "SELECT restrictions_synced_at AS r, extras_synced_at AS e FROM section_detail WHERE term = ? AND crn = ?"
+    )
+    .bind(term, crn)
+    .first<{ r: number | null; e: number | null }>();
+  return { detail, restrictionsSyncedAt: st?.r ?? null, extrasSyncedAt: st?.e ?? null };
+}

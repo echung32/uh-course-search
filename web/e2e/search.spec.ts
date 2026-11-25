@@ -236,14 +236,9 @@ test("expanding a section row shows catalog, lazily-fetched detail, and instruct
   await expect(page.getByText("jane@hawaii.edu")).toBeVisible();
 
   // Section detail is NOT seeded — it's fetched live from the mock SIS on first
-  // view and stored (lazy cache-on-miss). The mock serves a $50 fee and marks
-  // CRN 10001 cross-listed with 10002.
+  // view and stored (lazy cache-on-miss). The mock serves a $50 fee.
   await expect(page.getByText("$50.00")).toBeVisible({ timeout: 15_000 });
-  // CRN 10002 now also appears in the table's CRN column, so scope this to the
-  // expanded panel's "Cross-listed CRNs" section.
-  await expect(
-    page.getByText("Cross-listed CRNs").locator("xpath=../following-sibling::div")
-  ).toHaveText("10002");
+  // Cross-list is ingest-only (never fetched on view), so no cross-listed CRNs here.
 
   // Collapsing hides the panel again.
   await page.getByRole("cell", { name: "ICS 111" }).first().click();
