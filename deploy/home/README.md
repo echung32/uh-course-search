@@ -133,5 +133,11 @@ machine with wrangler auth.
   docker compose run --rm cron yarn db:migrate-sqlite --db analytics --file /data/db/analytics.sqlite
   docker compose up -d        # recreate gateway + cron on the new image
   ```
+  Deploy the Worker only **after** migrating: Worker code that reads a new column 503s every search until the migration has run.
+- **One-time: `0016` usual date ranges (Schedule column).** After migrating to `0016` (which also repairs NULL `section_meeting.begin_date` rows from `raw_json`), fill `term.usual_start_date/usual_end_date` for every term, then deploy the Worker:
+  ```bash
+  docker compose run --rm cron yarn ingest usual-dates     # or --term 202710 for one term
+  ```
+  Successful syncs keep mutable terms current after that. Until it runs, every meeting in the table shows its dates (the "no usual range" fallback).
 - **Restore:** `docker compose stop`, copy a `data/backups/<db>-YYYY-MM-DD.sqlite` over `data/db/<db>.sqlite`, delete its `-wal`/`-shm` files, then `docker compose up -d`.
 - **Storage:** keep `./data` on a local disk. SQLite's WAL mode does not work on NFS/SMB mounts.

@@ -10,7 +10,8 @@ import { defineConfig, devices } from "@playwright/test";
  * SIS_BASE_URL. Nothing here touches the live UH host.
  */
 const MOCK_SIS_PORT = 9999;
-const APP_PORT = 4321;
+// Overridable so a run doesn't collide with a dev server on the default port.
+const APP_PORT = Number(process.env.E2E_APP_PORT ?? 4321);
 const SIS_BASE_URL = `http://127.0.0.1:${MOCK_SIS_PORT}/StudentRegistrationSsb`;
 const ADMIN_SECRET = "e2e-admin-secret";
 // e2e seeds and mutates its own throwaway D1 here — NOT the default
@@ -50,12 +51,12 @@ export default defineConfig({
     {
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/schedule-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
     },
     {
       name: "webkit",
       use: { ...devices["Desktop Safari"] },
-      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
+      testIgnore: ["**/ingest.spec.ts", "**/mcp.spec.ts", "**/mcp-units.spec.ts", "**/schedule-units.spec.ts", "**/gateway-units.spec.ts", "**/gateway-down.spec.ts"],
     },
   ],
 

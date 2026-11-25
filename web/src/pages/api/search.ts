@@ -7,7 +7,10 @@ import type { CourseSection, SearchParams, SearchResultsResponse } from "@/lib/s
 import type { TermSyncMeta } from "@/lib/db/queries";
 
 /** Wraps a CRN lookup as a single-(or zero-)row search response for the table. */
-function crnResponse(section: CourseSection | null): SearchResultsResponse {
+function crnResponse(
+  section: CourseSection | null,
+  meta: TermSyncMeta | null
+): SearchResultsResponse {
   const data = section ? [section] : [];
   return {
     success: true,
@@ -17,6 +20,7 @@ function crnResponse(section: CourseSection | null): SearchResultsResponse {
     pageMaxSize: data.length || 20,
     sectionsFetchedCount: data.length,
     pathMode: "search",
+    usualDateRange: meta?.usualDateRange ?? null,
   };
 }
 
@@ -32,7 +36,7 @@ async function handleSearch(request: Request, term: string, meta: TermSyncMeta |
   if (crn) {
     try {
       const section = await runCrnLookup(term, crn);
-      return new Response(JSON.stringify(crnResponse(section)), {
+      return new Response(JSON.stringify(crnResponse(section, meta)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

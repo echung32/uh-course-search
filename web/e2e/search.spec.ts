@@ -701,3 +701,37 @@ test("does not prefetch the next page for a dynamic (un-backfilled) term", async
   await page.waitForTimeout(500);
   expect(offsets.filter((o) => o === 25).length).toBe(prefetchesBefore);
 });
+
+test("search responses carry the term's usualDateRange", async ({ request }) => {
+  const usual = { start: "08/25/2025", end: "12/12/2025" };
+  const search = await (await request.get("/api/search?term=202710&subject=ICS")).json();
+  expect(search.usualDateRange).toEqual(usual);
+  const crn = await (await request.get("/api/search?term=202710&crn=10004")).json();
+  expect(crn.usualDateRange).toEqual(usual);
+  // A term with no computed range reports null (→ every meeting shows its dates).
+  const none = await (await request.get("/api/search?term=202610&subject=ICS")).json();
+  expect(none.usualDateRange).toBeNull();
+});
+
+test("schedule column keeps each meeting's time and room together", async ({ page }) => {
+  await runSearch(page, "ICS", "");
+  await expect(page.getByRole("columnheader", { name: "Schedule" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Days/Times" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Location" })).toHaveCount(0);
+
+  // ICS 311 sec 001 (CRN 10005): one line per meeting; the no-set-time online
+  // meeting goes last.
+  const cell = page.getByRole("row").filter({ hasText: "10005" }).getByTestId("schedule-cell");
+  const lines = cell.getByTestId("meeting-line");
+  await expect(lines).toHaveCount(3);
+  await expect(lines.nth(0)).toHaveText("MWF 10:30–11:20 AM POST 318A");
+  // Only the off-range one-day meeting carries dates — on its own line.
+  await expect(lines.nth(1)).toHaveText("T 6:00–7:50 PM KELLER 101 Sep 2 only");
+  await expect(lines.nth(2)).toHaveText("— ONLINE ASYNC");
+  await expect(cell).not.toContainText("Aug 25");
+
+  // ICS 211 (CRN 10004) meets on the usual dates → no date line at all.
+  const plain = page.getByRole("row").filter({ hasText: "10004" }).getByTestId("schedule-cell");
+  await expect(plain).toContainText("9:00–9:50 AM");
+  await expect(plain).not.toContainText(/[A-Z][a-z]{2} \d+ (–|only)/);
+});

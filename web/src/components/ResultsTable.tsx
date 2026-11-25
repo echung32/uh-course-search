@@ -33,7 +33,7 @@ import {
 import { SectionDetails } from "./SectionDetails";
 import { CoverageDialog, type CoverageParams } from "./CoverageDialog";
 import { abbreviateCampus } from "@/lib/campuses";
-import { formatMeetingTime } from "@/lib/meetingTime";
+import { ScheduleCell } from "@/components/ScheduleCell";
 import { cn } from "@/lib/utils";
 import { sectionStatus, STATUS_RAIL, STATUS_LABEL } from "@/lib/sectionStatus";
 import {
@@ -42,11 +42,11 @@ import {
   sortAttributes,
 } from "@/lib/attributes";
 import { PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE } from "@/lib/pageSize";
-import type { CourseSection, MeetingTime, SearchResultsResponse } from "@/lib/sis/types";
+import type { CourseSection, DateRange, MeetingTime, SearchResultsResponse } from "@/lib/sis/types";
 
 // Total columns including the leading expand toggle and the (optional) Campus
 // column — kept in sync with the header / skeleton / empty-state colSpans below.
-const COLUMN_COUNT = 13;
+const COLUMN_COUNT = 12;
 
 function columnCount(showCampus: boolean): number {
   return showCampus ? COLUMN_COUNT : COLUMN_COUNT - 1;
@@ -74,10 +74,12 @@ function SectionRow({
   section,
   onSelectCrn,
   showCampus,
+  usualDateRange,
 }: {
   section: CourseSection;
   onSelectCrn: (crn: string) => void;
   showCampus: boolean;
+  usualDateRange: DateRange | null | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const status = sectionStatus(section);
@@ -149,29 +151,8 @@ function SectionRow({
           <span className="text-muted-foreground text-sm">TBA</span>
         )}
       </TableCell>
-      <TableCell className="whitespace-nowrap text-sm">
-        {meetings.length === 0 ? (
-          <span>TBA</span>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {meetings.map((mt, i) => (
-              <span key={i}>{formatMeetingTime(mt)}</span>
-            ))}
-          </div>
-        )}
-      </TableCell>
-      <TableCell className="text-sm">
-        {meetings.length === 0 ? (
-          <span>—</span>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {meetings.map((mt, i) => (
-              <span key={i}>
-                {mt.building ? `${mt.building} ${mt.room ?? ""}`.trim() : "—"}
-              </span>
-            ))}
-          </div>
-        )}
+      <TableCell>
+        <ScheduleCell meetings={meetings} usualDateRange={usualDateRange} />
       </TableCell>
       <TableCell className="text-center text-sm">
         <span className={section.seatsAvailable > 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}>
@@ -373,8 +354,7 @@ export function ResultsTable({
               <TableHead>Title</TableHead>
               <TableHead className="w-16 text-center">Cr</TableHead>
               <TableHead>Instructor</TableHead>
-              <TableHead>Days/Times</TableHead>
-              <TableHead>Location</TableHead>
+              <TableHead>Schedule</TableHead>
               <TableHead className="w-20 text-center">Enrolled</TableHead>
               <TableHead className="w-20 text-center">Waitlist</TableHead>
               <TableHead>Attributes</TableHead>
@@ -396,6 +376,7 @@ export function ResultsTable({
                   section={section}
                   onSelectCrn={onSelectCrn}
                   showCampus={showCampus}
+                  usualDateRange={results?.usualDateRange}
                 />
               ))
             )}

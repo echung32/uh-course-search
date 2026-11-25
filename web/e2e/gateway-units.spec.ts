@@ -246,8 +246,8 @@ test("migrate-sqlite applies only unapplied migrations", () => {
     const names = (after.prepare("SELECT name FROM d1_migrations ORDER BY id").all() as Array<{ name: string }>).map(
       (r) => r.name
     );
-    expect(names.at(-1)).toBe("0015_campus_count_index.sql");
-    expect(names).toHaveLength(15);
+    expect(names.at(-1)).toBe("0016_term_usual_dates.sql");
+    expect(names).toHaveLength(16);
     const cols = (after.prepare("PRAGMA table_info(course_prereq)").all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toContain("ast_json");
     expect(cols).not.toContain("raw_text");
