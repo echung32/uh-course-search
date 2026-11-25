@@ -14,7 +14,11 @@ import {
 const TERM = "202710";
 let f: FreshSearchDb;
 
-test.afterEach(() => f?.cleanup());
+// Clear `f` once cleaned so a later test that opens no fixture doesn't close it twice.
+test.afterEach(() => {
+  f?.cleanup();
+  f = undefined as unknown as FreshSearchDb;
+});
 
 function insertSection(crn: string) {
   f.raw
@@ -223,4 +227,28 @@ test.describe("fragment fetchers", () => {
     const n = f.raw.prepare("SELECT COUNT(*) AS n FROM section_detail WHERE term = ?").get(FRAG_TERM) as { n: number };
     expect(n.n).toBe(0);
   });
+});
+
+// ---- Capture time box ----
+test("captureDeadline cuts at 21:45 HST", async () => {
+  // backfill.ts pulls in sis/client.ts, which reads SIS_BASE_URL at module load.
+  const saved = process.env.SIS_BASE_URL;
+  process.env.SIS_BASE_URL = `${MOCK}/StudentRegistrationSsb`;
+  const { captureDeadline } = await import("../src/lib/ingest/backfill");
+  if (saved === undefined) delete process.env.SIS_BASE_URL;
+  else process.env.SIS_BASE_URL = saved;
+
+  const at = (iso: string) => Date.parse(iso);
+  const MIN = 60_000;
+  // Started before 21:45 HST: the cut wins when the budget would run past it...
+  expect(captureDeadline(at("2026-11-25T20:00:00-10:00"), 180)).toBe(at("2026-11-25T21:45:00-10:00"));
+  // ...and the budget wins when it ends first.
+  expect(captureDeadline(at("2026-11-25T09:00:00-10:00"), 180)).toBe(at("2026-11-25T12:00:00-10:00"));
+  // Early morning HST (still the previous UTC day's evening offset) is the same HST day.
+  expect(captureDeadline(at("2026-11-25T00:30:00-10:00"), 180)).toBe(at("2026-11-25T03:30:00-10:00"));
+  // Started at/after 21:45 HST: only the budget applies.
+  const late = at("2026-11-25T23:00:00-10:00");
+  expect(captureDeadline(late, 180)).toBe(late + 180 * MIN);
+  const cut = at("2026-11-25T21:45:00-10:00");
+  expect(captureDeadline(cut, 30)).toBe(cut + 30 * MIN);
 });

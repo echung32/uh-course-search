@@ -319,18 +319,17 @@ export default async function globalSetup() {
     now
   );
 
-  // Historical (view-only) fixture terms for the details-backfill selection test
+  // Historical (view-only) fixture terms for the capture-driver tests
   // (e2e/ingest.spec.ts). Each is_view_only=1 (the read-path terms above are 0)
-  // and has a minimal catalog (one course_section) so the EXISTS guard passes.
-  // Negative display_order keeps them last in the term dropdown (getTerms orders
-  // display_order DESC, code DESC) so the read-path default term (202710) is
-  // unaffected. Backfill picks the NEWEST that lacks a completed `details`
-  // sync_run:
-  //   202700 — done    (details sync_run status 'ok')     → excluded
-  //   202695 — failed  (details sync_run status 'error')   → eligible (retry)
-  //   202690 — never   (no details sync_run)               → eligible
-  //   202680 — no catalog (no course_section)              → excluded (catalog-missing)
-  // ⇒ newest eligible = 202695; pending = 2; catalog-missing = 1.
+  // and has a minimal catalog (one course_section). Negative display_order keeps
+  // them last in the term dropdown (getTerms orders display_order DESC, code
+  // DESC) so the read-path default term (202710) is unaffected. Capture judges
+  // completeness from the data, not sync_run (the details runs below are
+  // deliberately misleading):
+  //   202700 — complete: every fragment stamped + a course row → no gaps (absent)
+  //   202695 — catalog only, details sync_run 'error'           → 5 gaps
+  //   202690 — catalog only, no sync_run                        → 5 gaps
+  //   202680 — no catalog (no course_section)                   → absent
   const voTerm = db.prepare(
     "INSERT INTO term (code, description, is_view_only, display_order, last_synced_at) VALUES (?, ?, 1, ?, ?)"
   );
@@ -356,6 +355,17 @@ export default async function globalSetup() {
   );
   voRun.run("202700", now, now, "ok");
   voRun.run("202695", now, now, "error");
+  db.prepare(
+    `INSERT INTO section_detail
+       (term, crn, restrictions_synced_at, extras_synced_at, crosslist_synced_at, synced_at)
+     VALUES ('202700', '202700-1', ?, ?, ?, ?)`
+  ).run(now, now, now, now);
+  db.prepare(
+    `INSERT INTO course
+       (term, campus_description, subject, course_number, facts_synced_at, facts_source,
+        prereq_synced_at, synced_at)
+     VALUES ('202700', ?, 'ICS', '111', ?, 'banner', ?, ?)`
+  ).run(MANOA, now, now, now);
 
   // --- Analytics-rollups fixture (e2e/ingest.spec.ts "rollups" test) ---------
   // A dedicated view-only term (202750) with exactly THREE deterministic
@@ -370,10 +380,8 @@ export default async function globalSetup() {
   //   term_facet_stats facet='schedule_type':
   //     'Lecture' sections=2 total_enr=50 ; 'Online' sections=1 total_enr=5
   voTerm.run("202750", "Analytics Fixture", -5, SYNCED);
-  // Mark its details pass complete so the backfill auto-selector (newest
-  // view-only term lacking an ok/partial `details` sync_run) skips it — this
-  // fixture exists for rollups, not backfill, and 202750 > 202695 would
-  // otherwise hijack the backfill-selection test.
+  // An 'ok' details run with no detail data: capture still lists it (its gaps
+  // come from the data, not sync_run).
   voRun.run("202750", now, now, "ok");
   const aSection = db.prepare(
     `INSERT INTO course_section

@@ -6,6 +6,12 @@
 # run-daily.sh holds a flock, so it skips (exit 0) if a manual run is still going.
 0 22 * * * /app/deploy/home/run-daily.sh
 
+# Gap-driven term capture (yarn ingest backfill) at 09:00, 13:00 and 17:00 HST:
+# fills missing details, active terms first, up to CAPTURE_MAX_MINUTES (default
+# 180) per run and never past 21:45 HST. Shares run-daily.sh's lock, so a run
+# blocked by the other (or by a manual one) exits 0.
+0 9,13,17 * * * /app/deploy/home/run-capture.sh
+
 # Nightly backups (VACUUM INTO /data/backups), after the refresh. Local retention
 # is BACKUP_KEEP_DAYS (default 14) — lower it when an offsite backup (restic etc.)
 # already keeps the history.

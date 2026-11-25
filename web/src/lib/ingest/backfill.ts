@@ -1,45 +1,63 @@
 /**
- * Historical details backfill — one term per invocation.
+ * Capture driver (`yarn ingest backfill`): fills the gaps of synced terms —
+ * active terms first, then view-only newest-first (spec §6.1). Completeness is
+ * judged from the data (`listTermsWithGaps` / `getTermGaps`), not `sync_run`.
  *
- * Historical (is_view_only=1) terms have their catalog synced but lack the
- * course-details layer (section_detail / course catalog+text / filter_option /
- * instructor cards). The daily RefreshWorkflow only touches mutable terms, so
- * this fills the gap, newest-first, one term per run, until none remain.
- *
- * Each call selects the newest view-only term still missing a completed details
- * pass (getNextBackfillTerm), runs the full syncDetails on it, and reports the
- * remaining count. Stateless + crash-robust: a dead run leaves no ok/partial
- * details sync_run, so the next call retries the same term.
+ * Time-boxed and resumable: an invocation captures term after term until its
+ * deadline (`--maxMinutes`, default 180, and never past 21:45 HST when started
+ * before it, keeping clear of the 22:00 daily job). Whatever is left is picked
+ * up by the next invocation. A term on which a capture makes zero progress is
+ * skipped by later selections (see `listTermsWithGaps`); a forced `term` runs
+ * regardless and only that term.
  */
 import type { D1Like } from "@/lib/db/types";
-import {
-  countBackfillTermsPending,
-  countViewOnlyTermsMissingCatalog,
-  getNextBackfillTerm,
-} from "@/lib/db/queries";
-import { syncDetails, type DetailsResult } from "@/lib/ingest/details";
+import { listTermsWithGaps } from "@/lib/db/queries";
+import { captureTerm, type CaptureResult } from "./capture";
+
+const DEFAULT_MAX_MINUTES = 180;
+const MINUTE_MS = 60_000;
+const HST_OFFSET_MS = 10 * 60 * MINUTE_MS; // Pacific/Honolulu = UTC−10, no DST
+const DAY_MS = 24 * 60 * MINUTE_MS;
+const CUTOFF_MS = (21 * 60 + 45) * MINUTE_MS; // 21:45 local
+/** Consecutive zero-progress captures that end an invocation (likely a Banner outage). */
+const MAX_ZERO_PROGRESS_RUN = 3;
+
+/**
+ * The capture deadline: `now + maxMinutes`, cut at today's 21:45 HST when `now`
+ * is before it. Pure (no clock or timezone database).
+ */
+export function captureDeadline(now: number, maxMinutes: number): number {
+  const budget = now + maxMinutes * MINUTE_MS;
+  const local = now - HST_OFFSET_MS;
+  const cutoff = local - (((local % DAY_MS) + DAY_MS) % DAY_MS) + CUTOFF_MS + HST_OFFSET_MS;
+  return now < cutoff ? Math.min(budget, cutoff) : budget;
+}
 
 export interface BackfillOptions {
-  /** Force a specific term instead of auto-selecting the newest pending one. */
+  /** Capture this term only, instead of auto-selecting. */
   term?: string;
-  /** Select + report only; do not call Banner. */
+  /** Report gap counts per term only; no network call. */
   dryRun?: boolean;
-  /** Per-fetch Banner throttle (ms). Default 250 (matches the manual runs). */
+  /** Time budget (default 180). */
+  maxMinutes?: number;
+  /** Per-fetch Banner throttle (ms). Default 250. */
   delayMs?: number;
   log?: (msg: string) => void;
 }
 
 export interface BackfillResult {
-  /** The selected term (processed unless dryRun); null = nothing pending. */
+  /** The selected (first captured) term; null = nothing has gaps. */
   term: string | null;
-  /** True when no view-only term needs backfilling. */
+  /** True when no term has gaps (and none was forced). */
   done: boolean;
-  /** Pending view-only terms at the start of this run (incl. the selected one). */
+  /** Terms with gaps at the start of this run. */
   remaining: number;
-  /** View-only terms whose catalog isn't synced (skipped; FYI). */
-  catalogMissing: number;
-  /** Present only when a term was actually processed (not dryRun, term != null). */
-  details?: DetailsResult;
+  /** dryRun only: every selectable term with its gap count, in capture order. */
+  terms?: Array<{ code: string; isViewOnly: boolean; gaps: number }>;
+  /** The capture of `term` (absent on dryRun or when nothing has gaps). */
+  capture?: CaptureResult;
+  /** Every capture this invocation ran, in order (`capture` is the first). */
+  captures?: CaptureResult[];
 }
 
 export async function backfillNextTerm(
@@ -47,41 +65,47 @@ export async function backfillNextTerm(
   options: BackfillOptions = {}
 ): Promise<BackfillResult> {
   const log = options.log ?? (() => {});
-  const remaining = await countBackfillTermsPending(db);
-  const catalogMissing = await countViewOnlyTermsMissingCatalog(db);
-  if (catalogMissing > 0) {
-    log(`[backfill] ${catalogMissing} view-only term(s) have no catalog — skipped (sync first).`);
+  const maxMinutes = options.maxMinutes ?? DEFAULT_MAX_MINUTES;
+  if (!(Number.isFinite(maxMinutes) && maxMinutes > 0)) {
+    throw new Error(`maxMinutes must be a positive number (got ${options.maxMinutes})`);
   }
+  const terms = await listTermsWithGaps(db);
+  const remaining = terms.length;
+  const first = options.term ?? terms[0]?.code ?? null;
 
-  const term = options.term ?? (await getNextBackfillTerm(db));
-  if (!term) {
-    log(`[backfill] nothing to backfill — all view-only terms have details.`);
-    return { term: null, done: true, remaining, catalogMissing };
-  }
-
-  log(`[backfill] selected ${term} (${remaining} pending)`);
   if (options.dryRun) {
-    return { term, done: false, remaining, catalogMissing };
+    log(`[capture] dry run: ${remaining} term(s) with gaps`);
+    for (const t of terms) log(`[capture]   ${t.code}${t.isViewOnly ? " (view-only)" : ""}: ${t.gaps} gaps`);
+    return { term: first, done: first === null, remaining, terms };
+  }
+  if (first === null) {
+    log(`[capture] nothing to capture — every synced term is complete.`);
+    return { term: null, done: true, remaining };
   }
 
-  const details = await syncDetails(db, term, {
-    // Skip the per-instructor contact-card pass. Banner's contact-card endpoint
-    // 500s for every faculty id on these terms (confirmed 2026-06-16: the prod
-    // `instructor` table has ~2 rows against ~254k faculty links — the pass has
-    // never meaningfully populated, app-wide, including the daily refresh), so on
-    // a historical backfill it's pure wasted load: thousands of guaranteed-failing
-    // calls per term (~3.9k on the largest). Section faculty name/email already
-    // come from the catalog sync (section_faculty); only the title/dept/college
-    // CARD is unavailable — and it's unavailable everywhere until the endpoint is
-    // fixed as separate, app-wide work. Skipping keeps backfill runs fast + `ok`.
-    instructors: false,
-    courseDelayMs: options.delayMs ?? 250,
-    log,
-  });
-  log(
-    `[backfill] ${term} details: status=${details.status} ` +
-      `sections=${details.sectionDetails} courses=${details.courses} ` +
-      `instructors=${details.instructors}`
-  );
-  return { term, done: false, remaining, catalogMissing, details };
+  const deadline = captureDeadline(Date.now(), maxMinutes);
+  log(`[capture] ${remaining} term(s) with gaps; deadline ${new Date(deadline).toISOString()}`);
+  const captureOpts = { deadline, delayMs: options.delayMs ?? 250, log };
+
+  const captures: CaptureResult[] = [];
+  if (options.term) {
+    captures.push(await captureTerm(db, options.term, captureOpts));
+  } else {
+    const tried = new Set<string>();
+    let zeroRun = 0;
+    let next: string | undefined = first;
+    while (next !== undefined && Date.now() < deadline) {
+      tried.add(next);
+      const c = await captureTerm(db, next, captureOpts);
+      captures.push(c);
+      if (c.stoppedEarly) break;
+      zeroRun = c.progress === 0 ? zeroRun + 1 : 0;
+      if (zeroRun >= MAX_ZERO_PROGRESS_RUN) {
+        log(`[capture] ${zeroRun} terms in a row made no progress — stopping (Banner may be down).`);
+        break;
+      }
+      next = (await listTermsWithGaps(db)).find((t) => !tried.has(t.code))?.code;
+    }
+  }
+  return { term: first, done: false, remaining, capture: captures[0], captures };
 }

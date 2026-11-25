@@ -85,7 +85,7 @@ export interface DetailsResult {
 }
 
 /** Persists every filter-option list for a term. */
-async function syncFilterOptions(
+export async function syncFilterOptions(
   db: D1Like,
   session: SisSession,
   term: string,

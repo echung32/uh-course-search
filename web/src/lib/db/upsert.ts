@@ -890,7 +890,7 @@ export interface SyncRunHandle {
 export async function startSyncRun(
   db: D1Like,
   term: string,
-  kind: "full" | "terms" | "details",
+  kind: "full" | "terms" | "details" | "capture",
   startedAt: number
 ): Promise<SyncRunHandle> {
   const row = await db
@@ -912,12 +912,14 @@ export async function finishSyncRun(
     subjectsDone?: number;
     sectionsUpserted?: number;
     errorMessage?: string;
+    /** JSON summary (e.g. capture gap counts, crseavail health). */
+    notes?: string;
   }
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE sync_run SET finished_at = ?, status = ?, subjects_total = ?,
-         subjects_done = ?, sections_upserted = ?, error_message = ?
+         subjects_done = ?, sections_upserted = ?, error_message = ?, notes = ?
        WHERE id = ?`
     )
     .bind(
@@ -927,6 +929,7 @@ export async function finishSyncRun(
       fields.subjectsDone ?? null,
       fields.sectionsUpserted ?? null,
       fields.errorMessage ?? null,
+      fields.notes ?? null,
       handle.id
     )
     .run();

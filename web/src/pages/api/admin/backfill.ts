@@ -1,17 +1,20 @@
 /**
  * POST /api/admin/backfill  (x-admin-secret required)
  *
- * Backfills the course-details layer for the newest historical (view-only) term
- * that still lacks it — one term per call (docs/superpowers/specs/
- * 2026-06-16-historical-details-backfill-design.md). The CLI `yarn ingest
- * backfill` is the real driver; this route exists so the e2e suite (and ad-hoc
- * ops) can exercise the same path. Disabled in production (INGEST_ON_WORKER
- * unset → 501), like the other admin ingestion routes.
+ * Gap-driven capture (docs/superpowers/specs/2026-11-25-crseavail-hybrid-ingest-
+ * design.md §6.1): fills the missing details of synced terms, active first,
+ * time-boxed. The CLI `yarn ingest backfill` is the real driver; this route
+ * exists so the e2e suite (and ad-hoc ops) can exercise the same path. Disabled
+ * in production (INGEST_ON_WORKER unset → 501), like the other admin ingestion
+ * routes.
  *
  * Query params:
- *   - dryRun=1     select + report only; no Banner call.
- *   - term=<code>  force a specific term instead of auto-selecting.
- *   - delayMs=<n>  per-fetch throttle (default 250).
+ *   - dryRun=1        report gap counts per term only; no network call.
+ *   - term=<code>     capture this term only instead of auto-selecting.
+ *   - delayMs=<n>     per-fetch throttle (default 250).
+ *   - maxMinutes=<n>  time budget (default 180; never past 21:45 HST).
+ *
+ * Response: { ok, term, done, remaining, terms? (dryRun), capture?, captures? }.
  *
  * Callers must send Content-Type: application/json (Astro CSRF; see sync.ts).
  */
@@ -30,9 +33,14 @@ export const POST: APIRoute = async ({ request }) => {
   const dryRun = url.searchParams.get("dryRun") === "1";
   const term = url.searchParams.get("term") ?? undefined;
   const delayMs = Number(url.searchParams.get("delayMs") ?? "250");
+  const maxRaw = url.searchParams.get("maxMinutes");
+  const maxMinutes = maxRaw === null ? undefined : Number(maxRaw);
+  if (maxMinutes !== undefined && !(Number.isFinite(maxMinutes) && maxMinutes > 0)) {
+    return json({ ok: false, error: "maxMinutes must be a positive number" }, 400);
+  }
 
   try {
-    const result = await backfillNextTerm(getDb(), { dryRun, term, delayMs });
+    const result = await backfillNextTerm(getDb(), { dryRun, term, delayMs, maxMinutes });
     return json({ ok: true, ...result });
   } catch (err) {
     console.error("Backfill failed:", err);

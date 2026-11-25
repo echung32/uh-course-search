@@ -17,7 +17,7 @@
  *   yarn ingest sync [--term 202730] [--delayMs 250] [--subjectsPerSession N]
  *   yarn ingest sync-details --term 202730 [--delayMs 250] [--no-sections] ...
  *   yarn ingest refresh-run [--term 202710] [--delayMs 200]
- *   yarn ingest backfill [--term 202700] [--delayMs 250] [--dryRun]
+ *   yarn ingest backfill [--term 202700] [--delayMs 250] [--maxMinutes 180] [--dryRun]
  *   yarn ingest backfill-attributes [--term 202710] [--force]
  *   yarn ingest rollups [--term 202710]
  *   yarn ingest prereqs [--term 202710]
@@ -129,6 +129,7 @@ async function main() {
         term: typeof flags.term === "string" ? flags.term : undefined,
         dryRun: flags.dryRun === true,
         delayMs: num(flags.delayMs) ?? 250,
+        maxMinutes: num(flags.maxMinutes),
         log,
       });
       console.log(JSON.stringify({ ok: true, ...result }, null, 2));

@@ -3,12 +3,14 @@
 The Cloudflare Worker serves the site. Its database lives here: two SQLite
 files behind a small authenticated **SQL gateway**, reached through your
 host-level `cloudflared` tunnel + Cloudflare Access. A `cron` container runs the
-daily Banner refresh and nightly backups against the same files.
+daily Banner refresh, the daytime term capture and nightly backups against the
+same files.
 
 ```
 Worker ──(Access service token + bearer)──▶ <gateway-host> ──▶ host cloudflared
        ──▶ 127.0.0.1:8787 ──▶ gateway container ──▶ ./data/db/{search,analytics}.sqlite
-cron container (22:00 HST: yarn ingest daily · 04:00 HST: yarn db:backup) ──▶ same files
+cron container (22:00 HST: yarn ingest daily · 09/13/17:00 HST: yarn ingest backfill
+                · 04:00 HST: yarn db:backup) ──▶ same files
 ```
 
 Design + rationale: `docs/superpowers/specs/2026-11-24-home-backend-design.md`.
@@ -20,6 +22,8 @@ Design + rationale: `docs/superpowers/specs/2026-11-24-home-backend-design.md`.
 | `Dockerfile` | One image (Node 24 + sqlite3 + supercronic), build context = repo root |
 | `compose.yaml` | `gateway` (loopback `127.0.0.1:8787`, mounts only `./data/db`) and `cron` (mounts all of `./data`, incl. backups) |
 | `crontab` | supercronic schedule (TZ=Pacific/Honolulu) |
+| `run-daily.sh` | Locked wrapper for `yarn ingest daily` (the 22:00 refresh) |
+| `run-capture.sh` | Locked wrapper for `yarn ingest backfill` (the daytime capture); same lock as `run-daily.sh` |
 | `env.example` | Template for `deploy/home/.env` (git-ignored) |
 | `cloudflared-ingress.example.yml` | Rule to add to the host's cloudflared config |
 
@@ -125,6 +129,10 @@ machine with wrangler auth.
 
 - **Logs:** `docker compose logs -f gateway` shows one line per query (db, statement count, ms; never SQL or params). `docker compose logs -f cron` shows the refresh and backup output.
 - **Manual refresh:** `docker compose exec -d cron sh -c '/app/deploy/home/run-daily.sh > /data/daily-manual.log 2>&1'`. Always go through `run-daily.sh`, never bare `yarn ingest daily`. It holds `/data/.daily.lock`, so a manual run and the 22:00 cron can't overlap; whichever starts second logs "skipped" and exits.
+- **Term capture.** `run-capture.sh` (09:00, 13:00 and 17:00 HST) runs `yarn ingest backfill`, which fills each synced term's missing details: restrictions, fees/linked/syllabus and cross-list per CRN, and facts and prereqs per course. Completeness is read from the data (the per-fragment `*_synced_at` stamps), not from `sync_run`, so only gaps are fetched and an interrupted run resumes where it stopped. Active terms go first, then view-only terms newest-first. Each run stops after `CAPTURE_MAX_MINUTES` (default 180) and never past 21:45 HST, clear of the 22:00 refresh. It shares `/data/.daily.lock` with `run-daily.sh`, so the two never overlap; a blocked run logs "skipped" and exits 0. Each term's run writes a `sync_run` row with `kind='capture'` and its gap counts in `notes`. A term where a run made no progress (e.g. Banner 500s for a cancelled CRN) is skipped for 7 days unless its gaps change; after 3 such terms in a row, the run stops, since Banner may be down.
+  - **See what's left, without network calls:** `docker compose exec cron /app/deploy/home/run-capture.sh --dryRun` lists every term with gaps and its gap count, in capture order.
+  - **One term:** `docker compose exec cron /app/deploy/home/run-capture.sh --term 202700` captures just that term, even if it is being skipped.
+  - **crseavail:** with `CRSEAVAIL=1` (in `.env`), course facts and cross-lists come from UH's Class Availability API in bulk, falling back to Banner automatically per campus+subject when a response fails or looks wrong. Fallbacks are logged and recorded in `sync_run.notes` (`"crseavail":"degraded"`, `unitsFallback`). Unset it to go Banner-only.
 - **Schema changes and updates.** Migrations are baked into the image, so build first and migrate from the new image. Only then restart the services onto it:
   ```bash
   git pull

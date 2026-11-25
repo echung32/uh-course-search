@@ -353,31 +353,211 @@ test("scheduled refresh: rolling Tier B2 refreshes stale details every run", asy
   expect(unchanged.ok()).toBeTruthy();
 });
 
-test("backfill selects the newest view-only term missing details", async ({ request }) => {
-  // Fixture view-only terms (global-setup.ts): 202700 done (ok), 202695 failed
-  // (error → eligible), 202690 never-run (eligible), 202680 no catalog (skipped).
-  // dryRun = pure D1 selection, no Banner. Newest eligible is 202695.
-  const res = await request.post("/api/admin/backfill?dryRun=1", {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+// ── Gap-driven capture (backfill driver) ───────────────────────────────────
+// Completeness is judged from the data: a section gap is a missing
+// restrictions/extras/crosslist stamp (no section_detail row = all three); a
+// course gap is a missing facts/prereq stamp (no course row = both).
+const ADMIN_HEADERS = { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" };
+const searchDb = () =>
+  new DatabaseSync(findLocalD1File("course_section"), { enableForeignKeyConstraints: false });
+
+/** Remaining section + course gaps for a term, read straight from the DB. */
+function termGapRows(term: string): { sections: number; sectionGaps: number; courseGaps: number } {
+  const db = searchDb();
+  try {
+    const sections = (
+      db.prepare("SELECT COUNT(*) AS n FROM course_section WHERE term = ?").get(term) as { n: number }
+    ).n;
+    const sectionGaps = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM course_section cs
+             LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
+            WHERE cs.term = ? AND (sd.restrictions_synced_at IS NULL
+               OR sd.extras_synced_at IS NULL OR sd.crosslist_synced_at IS NULL)`
+        )
+        .get(term) as { n: number }
+    ).n;
+    const courseGaps = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM
+             (SELECT DISTINCT IFNULL(campus_description, '') AS campus, subject, course_number
+                FROM course_section WHERE term = ?) s
+             LEFT JOIN course c ON c.term = ? AND c.campus_description = s.campus
+              AND c.subject = s.subject AND c.course_number = s.course_number
+            WHERE c.facts_synced_at IS NULL OR c.prereq_synced_at IS NULL`
+        )
+        .get(term, term) as { n: number }
+    ).n;
+    return { sections, sectionGaps, courseGaps };
+  } finally {
+    db.close();
+  }
+}
+
+test("capture dry-run lists gap terms, active first", async ({ request }) => {
+  // Fixture view-only terms (global-setup.ts): 202700 complete (every fragment
+  // stamped + a course row) → absent; 202695/202690 catalog, no details →
+  // present; 202680 no sections → absent. dryRun = D1 only, no Banner.
+  const res = await request.post("/api/admin/backfill?dryRun=1", { headers: ADMIN_HEADERS });
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.ok).toBe(true);
+  const terms = body.terms as Array<{ code: string; isViewOnly: boolean; gaps: number }>;
+  expect(terms.length).toBeGreaterThan(0);
+  const codes = terms.map((t) => t.code);
+
+  // Active terms (202710 has seeded sections without details) come first: no
+  // view-only entry precedes an active one.
+  expect(terms[0].isViewOnly).toBe(false);
+  const firstViewOnly = terms.findIndex((t) => t.isViewOnly);
+  expect(firstViewOnly).toBeGreaterThan(0);
+  expect(terms.slice(firstViewOnly).every((t) => t.isViewOnly)).toBe(true);
+  // Newest first within the view-only group.
+  const vo = terms.filter((t) => t.isViewOnly).map((t) => t.code);
+  expect(vo).toEqual([...vo].sort().reverse());
+
+  expect(codes).not.toContain("202700");
+  expect(codes).toContain("202690");
+  expect(codes).not.toContain("202680");
+  for (const t of terms) expect(t.gaps).toBeGreaterThan(0);
+  // 202690: one section with no section_detail (3) and no course row (2).
+  expect(terms.find((t) => t.code === "202690")!.gaps).toBe(5);
+
+  expect(body.term).toBe(terms[0].code);
+  expect(body.done).toBe(false);
+  expect(body.remaining).toBe(terms.length);
+  expect(body.capture).toBeUndefined();
+  expect(body.catalogMissing).toBeUndefined();
+
+  // `term=` overrides the selection (dryRun still reports without running).
+  const forced = await request.post("/api/admin/backfill?dryRun=1&term=202700", { headers: ADMIN_HEADERS });
+  const forcedBody = await forced.json();
+  expect(forcedBody.term).toBe("202700");
+  expect(forcedBody.capture).toBeUndefined();
+});
+
+test("capture fills every gap for a term and reports ok", async ({ request }) => {
+  // Open real gaps in TERM: two CRNs lose their section_detail row, the MATH
+  // course rows vanish, and one course loses its prereq stamp.
+  const db = searchDb();
+  try {
+    db.prepare("DELETE FROM section_detail WHERE term = ? AND crn IN ('10001', '20001')").run(TERM);
+    db.prepare("DELETE FROM course WHERE term = ? AND subject = 'MATH'").run(TERM);
+    db.prepare("UPDATE course SET prereq_synced_at = NULL WHERE term = ? AND course_number = '311'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const before = termGapRows(TERM);
+  expect(before.sectionGaps).toBe(2);
+  expect(before.courseGaps).toBeGreaterThan(1);
+
+  const started = Date.now();
+  const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+    headers: ADMIN_HEADERS,
   });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
-  expect(body).toMatchObject({
-    ok: true,
-    term: "202695", // newest eligible (202700 excluded: ok details run)
-    done: false,
-    remaining: 2, // 202695 + 202690
-    catalogMissing: 1, // 202680 has no course_section
-  });
-  // dryRun must not touch Banner → no details sub-result.
-  expect(body.details).toBeUndefined();
+  expect(body.ok).toBe(true);
+  expect(body.term).toBe(TERM);
+  expect(body.capture).toMatchObject({ term: TERM, status: "ok", gapsAfter: 0, stoppedEarly: false });
+  expect(body.capture.gapsBefore).toBeGreaterThanOrEqual(2 * 3 + before.courseGaps);
+  expect(body.capture.progress).toBe(body.capture.gapsBefore);
 
-  // Forcing the done term still selects it (manual override), proving `term=`
-  // bypasses the auto-selection (dryRun reports it without running).
-  const forced = await request.post("/api/admin/backfill?dryRun=1&term=202700", {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  // Every CRN has all three fragment stamps; every course has facts + prereqs.
+  const after = termGapRows(TERM);
+  expect(after.sections).toBeGreaterThan(0);
+  expect(after.sectionGaps).toBe(0);
+  expect(after.courseGaps).toBe(0);
+
+  // One sync_run kind='capture' with the gap counts in notes.
+  const check = searchDb();
+  try {
+    const run = check
+      .prepare(
+        "SELECT status, notes FROM sync_run WHERE term = ? AND kind = 'capture' AND started_at >= ? ORDER BY id DESC"
+      )
+      .all(TERM, started) as Array<{ status: string; notes: string }>;
+    expect(run).toHaveLength(1);
+    expect(run[0].status).toBe("ok");
+    expect(JSON.parse(run[0].notes)).toMatchObject({
+      gapsBefore: body.capture.gapsBefore,
+      gapsAfter: 0,
+      progress: body.capture.gapsBefore,
+    });
+  } finally {
+    check.close();
+  }
+});
+
+test("capture resumes without refetching completed items", async ({ request }) => {
+  type Stamps = { r: number; e: number | null; x: number };
+  const stamps = (crn: string): Stamps => {
+    const db = searchDb();
+    try {
+      return db
+        .prepare(
+          `SELECT restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x
+             FROM section_detail WHERE term = ? AND crn = ?`
+        )
+        .get(TERM, crn) as Stamps;
+    } finally {
+      db.close();
+    }
+  };
+  const db = searchDb();
+  try {
+    db.prepare("UPDATE section_detail SET extras_synced_at = NULL WHERE term = ? AND crn = '10002'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const other = stamps("10003");
+  const target = stamps("10002");
+
+  const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+    headers: ADMIN_HEADERS,
   });
-  expect((await forced.json()).term).toBe("202700");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.capture).toMatchObject({ gapsBefore: 1, progress: 1, gapsAfter: 0, status: "ok" });
+
+  // Only the missing fragment was fetched: everything else keeps its stamp.
+  expect(stamps("10003")).toEqual(other);
+  const refreshed = stamps("10002");
+  expect(refreshed.e).not.toBeNull();
+  expect(refreshed.r).toBe(target.r);
+  expect(refreshed.x).toBe(target.x);
+});
+
+test("a zero-progress term is skipped", async ({ request }) => {
+  const db = searchDb();
+  try {
+    db.prepare("UPDATE section_detail SET restrictions_synced_at = NULL WHERE term = ? AND crn = '10003'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const fail = await request.post(`${MOCK_ORIGIN}/__mock/fail?endpoint=getRestrictions&crn=10003`);
+  expect(fail.ok()).toBeTruthy();
+  try {
+    const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+      headers: ADMIN_HEADERS,
+    });
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.capture).toMatchObject({ gapsBefore: 1, progress: 0, gapsAfter: 1, status: "partial" });
+
+    // The next selection skips it: same gap count as a zero-progress capture.
+    const dry = await request.post("/api/admin/backfill?dryRun=1", { headers: ADMIN_HEADERS });
+    const codes = ((await dry.json()).terms as Array<{ code: string }>).map((t) => t.code);
+    expect(codes).not.toContain(TERM);
+    expect(codes).toContain("202690");
+  } finally {
+    // Clear the fail rule; /__mock/reset also rewinds the catalog, so put it
+    // back on phase 2 for the rest of this serial file.
+    await request.post(`${MOCK_ORIGIN}/__mock/reset`);
+    await request.post(`${MOCK_ORIGIN}/__mock/advance`);
+  }
 });
 
 test("backfill admin route requires the secret", async ({ request }) => {
