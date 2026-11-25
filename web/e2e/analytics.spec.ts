@@ -168,12 +168,12 @@ test("api: delivery-mode returns schedule-type facet points", async ({ request }
 test("page: analytics dashboard renders the chart sections", async ({ page }) => {
   await page.goto("/analytics");
   await expect(page.getByRole("heading", { name: "Analytics" })).toBeVisible();
-  await expect(page.getByText("Course enrollment over time")).toBeVisible();
-  await expect(page.getByText("University enrollment trend")).toBeVisible();
-  await expect(page.getByText("Delivery-mode shift")).toBeVisible();
-  await expect(page.getByText("Course demand")).toBeVisible();
-  await expect(page.getByText("Subject growth")).toBeVisible();
-  await expect(page.getByText("When classes meet")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Course enrollment over time", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "University enrollment trend", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Delivery-mode shift", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Course demand", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Subject growth", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "When classes meet", exact: true })).toBeVisible();
   // Term-range control with its quick presets.
   await expect(page.getByText("Term range")).toBeVisible();
   await expect(page.getByRole("button", { name: "Last 5 yrs" })).toBeVisible();
@@ -192,10 +192,10 @@ test("page: charts are grouped under labelled filter bars", async ({ page }) => 
   await expect(trends.getByText("These filters apply to all 4 charts in this group")).toBeVisible();
   await expect(oneTerm.getByText("These filters apply to both charts in this group")).toBeVisible();
   for (const t of ["Course enrollment over time", "University enrollment trend", "Delivery-mode shift", "Subject growth"]) {
-    await expect(trends.getByText(t)).toBeVisible();
+    await expect(trends.getByRole("heading", { name: t, exact: true })).toBeVisible();
   }
   for (const t of ["Course demand", "When classes meet"]) {
-    await expect(oneTerm.getByText(t)).toBeVisible();
+    await expect(oneTerm.getByRole("heading", { name: t, exact: true })).toBeVisible();
   }
   await expect(trends.getByText("Term range")).toBeVisible();
   await expect(trends.getByText("This chart").first()).toBeVisible();
