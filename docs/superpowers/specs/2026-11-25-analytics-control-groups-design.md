@@ -33,7 +33,7 @@ in 30..331 and isn't knowable from public data).
 ## Approaches considered
 
 1. **Two labelled groups (picked).** "Trends over time" under the range/semester
-   bar; "One term" under a shared term + campus bar. Local controls only for
+   bar; "Term snapshot" under a shared term + campus bar. Local controls only for
    chart-specific choices.
 2. One bar; single-term charts use the range's end term. Fewer controls, but
    surprising coupling.
@@ -46,7 +46,7 @@ in 30..331 and isn't knowable from public data).
   subtitle "These filters apply to all 4 charts in this group". Charts: Course
   enrollment over time (local: course, campus), University enrollment trend (local:
   campus/college toggle), Delivery-mode shift, Subject growth.
-- **One term** group: header + Term and Campus comboboxes, subtitle "These filters
+- **Term snapshot** group (renamed from "One term" after review): header + Term and Campus comboboxes, subtitle "These filters
   apply to both charts in this group". Charts: Course demand (fill rate only), When
   classes meet. No local controls.
 - Local controls sit in a dashed box labelled "This chart".

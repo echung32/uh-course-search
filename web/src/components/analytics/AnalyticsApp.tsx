@@ -9,7 +9,7 @@ import { DeliveryModeShift } from "./DeliveryModeShift";
 import { FillRateLeaderboard, type LeaderboardRow } from "./FillRateLeaderboard";
 import { SubjectGrowth } from "./SubjectGrowth";
 import { MeetingHeatmap, type MeetingHeatCell } from "./MeetingHeatmap";
-import { classifyTerm, stripViewOnly, type Semester } from "./termFilter";
+import { classifyTerm, defaultSnapshotTerm, stripViewOnly, type Semester } from "./termFilter";
 import { Info } from "lucide-react";
 import {
   Tooltip,
@@ -132,8 +132,8 @@ function AnalyticsAppInner({
       spring: parseAsBoolean.withDefault(true),
       summer: parseAsBoolean.withDefault(true),
       special: parseAsBoolean.withDefault(false),
-      // "One term" group: drives both single-term charts (Course demand + When
-      // classes meet). Empty term = the newest rollup term (see oneTerm below).
+      // "Term snapshot" group: drives both single-term charts (Course demand +
+      // When classes meet). Empty term = the default (see snapshotTerm below).
       term: parseAsString.withDefault(""),
       campus: parseAsString.withDefault(""),
     },
@@ -303,23 +303,27 @@ function AnalyticsAppInner({
     () => campuses.map((c) => ({ value: c, label: c })),
     [campuses]
   );
-  // The "One term" group's effective term: the URL's, else the newest rollup
-  // term — the same getRollupTerms() list the fill-rate API defaults from, so
-  // both charts request one concrete term from their first fetch (no term-less
-  // fetch whose late response could clobber a term the user already picked).
-  const oneTerm = q.term || newest;
+  // The "Term snapshot" group's effective term: the URL's, else the newest base
+  // rollup term (skipping Extension/Apprenticeship/Accelerated sub-terms, which
+  // sort after their semester but cover few courses). Computed from the page's
+  // own rollupTerms, so both charts request one concrete term from their first
+  // fetch — no term-less fetch whose late response could clobber a user's pick.
+  const snapshotTerm = React.useMemo(
+    () => q.term || defaultSnapshotTerm(sortedTerms, termLabel),
+    [q.term, sortedTerms, termLabel]
+  );
   const [rows, setRows] = React.useState<LeaderboardRow[]>([]);
   React.useEffect(() => {
     let stale = false; // drop a superseded response (fast term/campus switches)
     const params = new URLSearchParams({ limit: "20" });
-    if (oneTerm) params.set("term", oneTerm);
+    if (snapshotTerm) params.set("term", snapshotTerm);
     if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/fill-rate?${params}`)
       .then((r) => r.json())
       .then((d) => { if (!stale) setRows(d.rows ?? []); })
       .catch(() => { if (!stale) setRows([]); });
     return () => { stale = true; };
-  }, [oneTerm, q.campus]);
+  }, [snapshotTerm, q.campus]);
 
   // ── Chart #6: subject growth ranking ──
   // Shares the dashboard term-range + semester filters: growth is measured
@@ -337,19 +341,19 @@ function AnalyticsAppInner({
   );
 
   // ── Chart #7: meeting-time heatmap ──
-  // Shares the "One term" group's term + campus.
+  // Shares the "Term snapshot" group's term + campus.
   const [heat, setHeat] = React.useState<MeetingHeatCell[]>([]);
   React.useEffect(() => {
-    if (!oneTerm) return;
+    if (!snapshotTerm) return;
     let stale = false;
-    const params = new URLSearchParams({ term: oneTerm });
+    const params = new URLSearchParams({ term: snapshotTerm });
     if (q.campus) params.set("campus", q.campus);
     fetch(`/api/analytics/meeting-heatmap?${params}`)
       .then((r) => r.json())
       .then((d) => { if (!stale) setHeat(d.cells ?? []); })
       .catch(() => { if (!stale) setHeat([]); });
     return () => { stale = true; };
-  }, [oneTerm, q.campus]);
+  }, [snapshotTerm, q.campus]);
 
   return (
     <div className="space-y-8">
@@ -480,8 +484,8 @@ function AnalyticsAppInner({
       </ControlGroup>
 
       <ControlGroup
-        id="one-term"
-        title="One term"
+        id="term-snapshot"
+        title="Term snapshot"
         subtitle="These filters apply to both charts in this group"
         controls={
           <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
@@ -489,7 +493,7 @@ function AnalyticsAppInner({
               <p className="mb-1 text-sm font-medium">Term</p>
               <Combobox
                 options={termOptions}
-                value={oneTerm}
+                value={snapshotTerm}
                 onChange={(v) => setQ({ term: v })}
                 placeholder="Select a term"
                 searchPlaceholder="Search terms"

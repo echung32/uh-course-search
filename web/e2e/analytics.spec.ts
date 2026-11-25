@@ -188,7 +188,7 @@ test("page: analytics dashboard renders the chart sections", async ({ page }) =>
 test("page: charts are grouped under labelled filter bars", async ({ page }) => {
   await page.goto("/analytics");
   const trends = page.getByRole("region", { name: "Trends over time" });
-  const oneTerm = page.getByRole("region", { name: "One term" });
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
   await expect(trends.getByText("These filters apply to all 4 charts in this group")).toBeVisible();
   await expect(oneTerm.getByText("These filters apply to both charts in this group")).toBeVisible();
   for (const t of ["Course enrollment over time", "University enrollment trend", "Delivery-mode shift", "Subject growth"]) {
@@ -201,24 +201,24 @@ test("page: charts are grouped under labelled filter bars", async ({ page }) => 
   await expect(trends.getByText("This chart").first()).toBeVisible();
 });
 
-test("one-term group requests the newest rollup term for both charts on first load", async ({ page, request }) => {
-  // The API's own default (newest rollup term). Not hardcoded: the chromium-only
-  // ingest spec adds rollups for a newer fixture term to the shared D1.
-  const { term } = await (await request.get("/api/analytics/fill-rate?limit=1")).json();
-  expect(term).toBeTruthy();
-  // Both charts must ask for that term on their FIRST request — no term-less
-  // fetch whose late response could overwrite a term the user already picked.
+test("term-snapshot group requests one base term for both charts on first load", async ({ page }) => {
+  // Both charts must ask for the same concrete term on their FIRST request — no
+  // term-less fetch whose late response could overwrite a term the user picked.
+  // (Which term is defaultSnapshotTerm's job; see term-filter.spec.ts.)
   const fill = page.waitForRequest((r) => r.url().includes("/api/analytics/fill-rate"));
   const heat = page.waitForRequest((r) => r.url().includes("/api/analytics/meeting-heatmap"));
   await page.goto("/analytics");
-  expect(new URL((await fill).url()).searchParams.get("term")).toBe(term);
-  expect(new URL((await heat).url()).searchParams.get("term")).toBe(term);
-  const oneTerm = page.getByRole("region", { name: "One term" });
-  // One term + one campus picker drive both charts; the cards have no pickers.
-  await expect(oneTerm.getByRole("combobox")).toHaveCount(2);
+  const fillTerm = new URL((await fill).url()).searchParams.get("term");
+  expect(fillTerm).toBeTruthy();
+  expect(new URL((await heat).url()).searchParams.get("term")).toBe(fillTerm);
+  const snapshot = page.getByRole("region", { name: "Term snapshot" });
+  // One term picker + one campus picker drive both charts; the cards have no pickers.
+  await expect(snapshot.getByRole("combobox")).toHaveCount(2);
+  // The default is a base semester, never a special sub-term.
+  await expect(snapshot.getByRole("combobox").first()).not.toHaveText(/Extension|Apprenticeship|Accelerated/);
 });
 
-test("changing the one-term campus refetches both charts with it", async ({ page }) => {
+test("changing the term-snapshot campus refetches both charts with it", async ({ page }) => {
   const hilo = "University of Hawaii at Hilo";
   await page.goto("/analytics?term=202710");
   await expect(page.locator("svg.recharts-surface").first()).toBeVisible({ timeout: 10000 });
@@ -228,7 +228,7 @@ test("changing the one-term campus refetches both charts with it", async ({ page
   const heat = page.waitForRequest(
     (r) => r.url().includes("/api/analytics/meeting-heatmap") && new URL(r.url()).searchParams.get("campus") === hilo
   );
-  const oneTerm = page.getByRole("region", { name: "One term" });
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
   await oneTerm.getByRole("combobox").filter({ hasText: "All campuses" }).click();
   await page.getByRole("option", { name: hilo }).click();
   expect(new URL((await fill).url()).searchParams.get("term")).toBe("202710");
@@ -236,9 +236,9 @@ test("changing the one-term campus refetches both charts with it", async ({ page
   await expect(page).toHaveURL(/campus=University/);
 });
 
-test("one-term campus from the URL scopes both charts", async ({ page }) => {
+test("term-snapshot campus from the URL scopes both charts", async ({ page }) => {
   await page.goto("/analytics?term=202710&campus=" + encodeURIComponent("University of Hawaii at Hilo"));
-  const oneTerm = page.getByRole("region", { name: "One term" });
+  const oneTerm = page.getByRole("region", { name: "Term snapshot" });
   await expect(oneTerm.getByRole("combobox").filter({ hasText: "University of Hawaii at Hilo" })).toHaveCount(1);
   await expect(oneTerm.getByRole("combobox").filter({ hasText: "All campuses" })).toHaveCount(0);
 });
