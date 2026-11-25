@@ -153,7 +153,7 @@ async function loadTermCourses(db: D1Like, term: string): Promise<TermCourse[]> 
 }
 
 /** CRN → course key for the whole term (the crseavail join, spec §3.2). */
-async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: CrnIndex; perUnit: Map<string, number> }> {
+export async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: CrnIndex; perUnit: Map<string, number> }> {
   const { results } = await db
     .prepare(
       `SELECT crn, IFNULL(campus_description, '') AS campus, subject, course_number AS courseNumber
@@ -175,7 +175,7 @@ async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: CrnIndex
 // Cached per process (per DB handle, so a test's fresh DB gets a fresh map).
 const campusMaps = new WeakMap<D1Like, Promise<Map<string, string>>>();
 
-function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
+export function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
   let p = campusMaps.get(db);
   if (!p) {
     p = loadCampusCodeMap(db).catch((e) => {

@@ -531,10 +531,12 @@ const server = createServer(async (req, res) => {
   if (path === "/ssb/searchResults/getXlstSections") {
     const body = await readBody(req);
     const crn = new URLSearchParams(body).get("courseReferenceNumber") ?? "";
-    // CRN 10001 (ICS 111 §001) is cross-listed with 10002.
+    // CRN 10001 (ICS 111 §001) is cross-listed with 10002, and vice versa (as real Banner is symmetric).
     const rows = crn === "10001"
       ? "<tr><td>10002</td><td>ICS</td><td>111</td><td>Intro</td><td>002</td></tr>"
-      : "";
+      : crn === "10002"
+        ? "<tr><td>10001</td><td>ICS</td><td>111</td><td>Intro</td><td>001</td></tr>"
+        : "";
     return sendHtml(
       res,
       200,

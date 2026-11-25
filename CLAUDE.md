@@ -76,6 +76,7 @@ yarn ingest refresh-run [--term 202710] [--delayMs 200]  # Tier A+B orchestrated
 yarn ingest backfill [--term 202700] [--dryRun] [--maxMinutes 180]  # gap-driven capture, time-boxed + resumable
 yarn ingest prereqs [--term 202710]                      # rebuild prerequisite graphs
 yarn ingest daily [--term 202710]                        # the cron entry point: refresh + rollups + prereqs
+yarn ingest crseavail-parity --term 202710               # read-only gate: crseavail vs stored Banner facts (calls crseavail even if CRSEAVAIL unset); exit 1 unless every field >= 99%
 yarn gateway                                             # home SQL gateway (GATEWAY_SECRET, SEARCH_/ANALYTICS_D1_LOCAL_FILE)
 yarn db:migrate-sqlite --db search|analytics --file <f>  # apply pending migrations to a self-hosted SQLite file
 yarn db:backup [--dir /data/backups] [--keepDays 14]     # VACUUM INTO dated backups + prune

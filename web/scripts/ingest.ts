@@ -22,6 +22,7 @@
  *   yarn ingest rollups [--term 202710]
  *   yarn ingest prereqs [--term 202710]
  *   yarn ingest daily [--term 202710] [--delayMs 200]
+ *   yarn ingest crseavail-parity --term 202710   (read-only; calls crseavail even with CRSEAVAIL unset)
  *
  * `daily` is the home server's scheduled entry point (compose `cron` service):
  * the RefreshWorkflow sequence — refresh the term list + every mutable term,
@@ -39,6 +40,7 @@ import { backfillNextTerm } from "@/lib/ingest/backfill";
 import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
 import { computeAllRollups, computeTermRollups } from "@/lib/ingest/rollups";
 import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
+import { crseavailParity } from "@/lib/ingest/parity";
 
 type Flags = Record<string, string | boolean>;
 
@@ -111,6 +113,14 @@ async function main() {
         log,
       });
       console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+      break;
+    }
+
+    case "crseavail-parity": {
+      if (typeof flags.term !== "string") throw new Error("--term is required");
+      const report = await crseavailParity(db, flags.term, { log });
+      console.log(JSON.stringify(report, null, 2));
+      if (!report.pass) process.exitCode = 1;
       break;
     }
 

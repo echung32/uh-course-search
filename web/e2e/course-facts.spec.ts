@@ -268,3 +268,33 @@ test("notesFromFacts summarizes the run", () => {
   );
   expect(notes).toMatchObject({ crseavail: "degraded", unitsFallback: 2, crosslist: "banner", noCampusCode: 0 });
 });
+
+test("parity passes when crseavail matches stored Banner values", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = ""; // Banner-only details; parity ignores the flag
+  const d = await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  expect(d.status).not.toBe("error");
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.unitsFailed).toBe(0);
+  expect(r.pass).toBe(true);
+  for (const field of Object.values(r.fields)) {
+    if (field.compared > 0) expect(field.rate).toBe(1);
+  }
+  expect(r.fields.description.compared).toBeGreaterThan(0);
+  expect(r.fields.gradingModes.compared).toBeGreaterThan(0);
+});
+
+test("parity reports a mismatched description", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  f.raw
+    .prepare("UPDATE course SET description = 'X' WHERE term = ? AND subject = 'ICS' AND course_number = '141'")
+    .run(TERM);
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.fields.description.rate).toBeLessThan(1);
+  expect(r.pass).toBe(false);
+  expect(r.fields.description.examples[0].stored).toBe("X");
+});
