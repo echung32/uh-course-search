@@ -5,5 +5,7 @@
 # takes ~90 min and must finish before Banner's ~02:00 HST maintenance window.
 0 22 * * * yarn ingest daily
 
-# Nightly backups (VACUUM INTO /data/backups, keep 14 days), after the refresh.
-0 4 * * * yarn db:backup --dir /data/backups --keepDays 14
+# Nightly backups (VACUUM INTO /data/backups), after the refresh. Local retention
+# is BACKUP_KEEP_DAYS (default 14) — lower it when an offsite backup (restic etc.)
+# already keeps the history.
+0 4 * * * yarn db:backup --dir /data/backups --keepDays "${BACKUP_KEEP_DAYS:-14}"

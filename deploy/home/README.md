@@ -23,6 +23,16 @@ Design + rationale: `docs/superpowers/specs/2026-11-24-home-backend-design.md`.
 | `env.example` | Template for `deploy/home/.env` (git-ignored) |
 | `cloudflared-ingress.example.yml` | Rule to add to the host's cloudflared config |
 
+### Merging into an existing compose project
+
+If the server already runs its services from a single compose file, copy the
+`gateway` and `cron` service blocks into it instead of running this project. Then:
+
+- Keep `build.context` pointing at the repo checkout (e.g. `$HOME/github/uh-course-search`) with `dockerfile: deploy/home/Dockerfile`.
+- Rename the env file (e.g. `.env.uhcs`).
+- Put the data wherever that host keeps app data.
+- If an offsite backup tool (restic, …) already copies that location, **exclude the live `db/` directory**, since copying a SQLite file mid-write can give an inconsistent copy. Let the tool pick up the consistent nightly copies in `backups/` instead, and lower `BACKUP_KEEP_DAYS`.
+
 ## Cutover runbook
 
 Run steps 1 and 3–7 on the server from `deploy/home/`, and steps 2 and 8 from a
