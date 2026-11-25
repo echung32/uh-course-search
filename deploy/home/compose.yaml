@@ -1,0 +1,43 @@
+# Home backend for uh-course-search (see README.md in this directory).
+#
+#   gateway — the SQL gateway the Cloudflare Worker queries. Published ONLY on
+#             host loopback; the host's cloudflared (outside Docker) forwards
+#             the tunnel hostname to http://127.0.0.1:8787.
+#   cron    — supercronic: nightly `yarn ingest daily` + `yarn db:backup`.
+#
+# Both share ./data (search.sqlite / analytics.sqlite + backups). SQLite runs in
+# WAL mode so reads keep flowing while the refresh writes. Keep ./data on a local
+# disk — WAL needs shared memory and doesn't work on network filesystems.
+name: uh-course-search
+
+x-common: &common
+  build:
+    context: ../..
+    dockerfile: deploy/home/Dockerfile
+  image: uh-course-search-backend:latest
+  env_file: .env
+  volumes:
+    - ./data:/data
+  restart: unless-stopped
+
+services:
+  gateway:
+    <<: *common
+    command: ["yarn", "gateway"]
+    environment:
+      GATEWAY_HOST: 0.0.0.0
+      GATEWAY_PORT: "8787"
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  cron:
+    <<: *common
+    command: ["supercronic", "/app/deploy/home/crontab"]
+    environment:
+      TZ: Pacific/Honolulu
+      D1_MODE: local

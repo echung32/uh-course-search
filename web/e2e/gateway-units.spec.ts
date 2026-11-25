@@ -2,7 +2,7 @@
 // Worker-side client. No browser, no app server: each test builds throwaway
 // SQLite files in a temp dir and talks to an in-process gateway over HTTP.
 import { test, expect } from "@playwright/test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -254,6 +254,36 @@ test("migrate-sqlite applies only unapplied migrations", () => {
     after.close();
 
     expect(run("--dryRun")).toContain("0 pending");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("db:backup writes a consistent copy and prunes old ones", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uhcs-bak-"));
+  const backups = join(dir, "backups");
+  mkdirSync(backups);
+  const files = { search: join(dir, "search.sqlite"), analytics: join(dir, "analytics.sqlite") };
+  try {
+    for (const [name, path] of Object.entries(files)) {
+      const db = new DatabaseSync(path);
+      db.exec(`CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('${name}-row')`);
+      db.close();
+    }
+    writeFileSync(join(backups, "search-2000-01-01.sqlite"), "old");
+
+    execFileSync("yarn", ["db:backup", "--dir", backups, "--keepDays", "14"], {
+      encoding: "utf8",
+      env: { ...process.env, SEARCH_D1_LOCAL_FILE: files.search, ANALYTICS_D1_LOCAL_FILE: files.analytics },
+    });
+
+    const today = new Date().toLocaleDateString("en-CA"); // local YYYY-MM-DD
+    for (const name of ["search", "analytics"]) {
+      const copy = new DatabaseSync(join(backups, `${name}-${today}.sqlite`), { readOnly: true });
+      expect(copy.prepare("SELECT v FROM t").get()).toEqual({ v: `${name}-row` });
+      copy.close();
+    }
+    expect(existsSync(join(backups, "search-2000-01-01.sqlite"))).toBe(false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

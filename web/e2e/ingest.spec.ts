@@ -537,8 +537,8 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
   expect(result.rollups).toEqual([TERM]);
   expect(Array.isArray(result.prereqs)).toBe(true);
 
-  const db = new DatabaseSync(findLocalD1File("course_section"), { readOnly: true });
-  const adb = new DatabaseSync(findLocalD1File("course_term_stats"), { readOnly: true });
+  const db = new DatabaseSync(findLocalD1File("course_section"), { enableForeignKeyConstraints: false });
+  const adb = new DatabaseSync(findLocalD1File("course_term_stats"));
   try {
     const run = db
       .prepare("SELECT COUNT(*) AS n FROM sync_run WHERE term = ? AND started_at >= ?")
@@ -549,6 +549,18 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       .get(TERM) as { s: number | null };
     expect(stats.s).toBeGreaterThanOrEqual(started);
   } finally {
+    // This chromium-only spec shares D1 with the read-path specs the other
+    // browsers run afterwards: drop the TERM rollups (they would add courses to
+    // the analytics/prereq course pickers) and any prereq graph built for a term
+    // other than the read-path fixture's 202710.
+    for (const table of ["course_term_stats", "term_facet_stats", "term_meeting_stats"]) {
+      adb.prepare(`DELETE FROM ${table} WHERE term = ?`).run(TERM);
+    }
+    for (const t of (result.prereqs as Array<{ term: string }>).map((p) => p.term)) {
+      if (t === "202710") continue;
+      db.prepare("DELETE FROM course_prereq WHERE term = ?").run(t);
+      db.prepare("DELETE FROM prereq_edge WHERE term = ?").run(t);
+    }
     db.close();
     adb.close();
   }
