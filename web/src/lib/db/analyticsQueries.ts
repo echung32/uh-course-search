@@ -52,10 +52,10 @@ export interface FacetTrendPoint {
   sections: number;
 }
 
-/** Per-term series broken down by a facet's values (charts #4, #5, #6). */
+/** Per-term series broken down by a facet's values (charts #4, #5). */
 export async function getFacetTrend(
   db: D1Like,
-  facet: "campus" | "college" | "schedule_type" | "subject"
+  facet: "campus" | "college" | "schedule_type"
 ): Promise<FacetTrendPoint[]> {
   const { results } = await db
     .prepare(
@@ -69,67 +69,6 @@ export async function getFacetTrend(
     )
     .bind(facet)
     .all<FacetTrendPoint>();
-  return results;
-}
-
-export interface LeaderboardRow {
-  subject: string;
-  subjectCourse: string | null;
-  courseTitle: string | null;
-  enrollment: number;
-  capacity: number;
-  waitlist: number;
-  sections: number;
-  fillRate: number;
-}
-
-/**
- * The "hardest to get into" courses for one term (chart #2), keyed on the
- * common-course id (`subject_course`) so a course offered at several campuses —
- * stored under campus-encoded `course_number`s (see getCourseTrend) — ranks once
- * with its fill rate summed across campuses. Restricted to courses with capped
- * sections (so the fill-rate denominator is real). `minSections` drops
- * single-section noise.
- *
- * There is deliberately no waitlist ranking: Banner's per-section wait_count
- * double-counts students who join several sections' waitlists, so a summed
- * waitlist overstates demand by an unknowable factor.
- */
-export async function getFillRateLeaderboard(
-  db: D1Like,
-  term: string,
-  limit: number,
-  minSections: number,
-  campus?: string
-): Promise<LeaderboardRow[]> {
-  // course_term_stats is keyed per (term, course, campus), so a campus filter is
-  // a plain WHERE — no schema change needed. Empty campus = summed across all.
-  const campusFilter = campus ? "AND campus = ?" : "";
-  const binds: (string | number)[] = campus
-    ? [term, campus, minSections, limit]
-    : [term, minSections, limit];
-  const { results } = await db
-    .prepare(
-      `SELECT MAX(subject)                         AS subject,
-              subject_course                       AS subjectCourse,
-              MAX(course_title)                    AS courseTitle,
-              SUM(total_enr)                       AS enrollment,
-              SUM(total_cap)                       AS capacity,
-              SUM(total_wait)                      AS waitlist,
-              SUM(sections)                        AS sections,
-              CASE WHEN SUM(total_cap) > 0
-                   THEN CAST(SUM(total_enr) AS REAL) / SUM(total_cap)
-                   ELSE 0 END                      AS fillRate
-         FROM course_term_stats
-        WHERE term = ? ${campusFilter}
-          AND subject_course IS NOT NULL AND subject_course != ''
-        GROUP BY subject_course
-       HAVING SUM(capped_sections) > 0 AND SUM(sections) >= ?
-        ORDER BY fillRate DESC, enrollment DESC
-        LIMIT ?`
-    )
-    .bind(...binds)
-    .all<LeaderboardRow>();
   return results;
 }
 
@@ -217,7 +156,7 @@ export async function getCampuses(db: D1Like): Promise<string[]> {
   return results.map((r) => r.campus);
 }
 
-/** Ordered list of terms that have rollups (for the leaderboard term picker). */
+/** Ordered list of terms that have rollups (for the term-range selector). */
 export async function getRollupTerms(db: D1Like): Promise<string[]> {
   const { results } = await db
     .prepare(

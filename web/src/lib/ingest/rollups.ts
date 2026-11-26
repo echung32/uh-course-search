@@ -113,19 +113,6 @@ async function readFacetStats(searchDb: D1Like, term: string): Promise<FacetStat
     .all<Omit<FacetStatRow, "facet">>();
   for (const r of sched.results) out.push({ facet: "schedule_type", ...r });
 
-  // facet = 'subject' — the subject code is on every section directly (no JOIN),
-  // so subject enrollment partitions cleanly like campus. Powers the subject
-  // growth-ranking chart.
-  const subject = await searchDb
-    .prepare(
-      `SELECT subject AS facet_value, ${AGG_COLS}
-         FROM course_section WHERE term = ?
-        GROUP BY subject`
-    )
-    .bind(term)
-    .all<Omit<FacetStatRow, "facet">>();
-  for (const r of subject.results) out.push({ facet: "subject", ...r });
-
   // facet = 'college' — LEFT JOIN course on its full grain (term, campus, subject, course).
   const college = await searchDb
     .prepare(
