@@ -9,7 +9,16 @@
 # time-boxed (CAPTURE_MAX_MINUTES, default 180) and never runs past 21:45 HST
 # when started before it, so it finishes ahead of the 22:00 daily job. Extra
 # args pass through (e.g. `--term 202700`, `--dryRun`).
+#
+# CAPTURE_ENABLED=0 pauses it: every run logs "paused" and exits 0 without
+# touching the lock or Banner (e.g. while crseavail is off, so the one-time
+# backfill doesn't run Banner-only). Override for one manual run with
+# `docker compose exec -e CAPTURE_ENABLED=1 cron /app/deploy/home/run-capture.sh`.
 set -u
+if [ "${CAPTURE_ENABLED:-1}" = "0" ]; then
+  echo "[run-capture] paused: CAPTURE_ENABLED=0"
+  exit 0
+fi
 LOCK="${DAILY_LOCK_FILE:-/data/.daily.lock}"
 cd /app/web || exit 1
 flock -n -E 75 "$LOCK" yarn ingest backfill --maxMinutes "${CAPTURE_MAX_MINUTES:-180}" "$@"
