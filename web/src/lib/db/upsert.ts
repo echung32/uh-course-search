@@ -3,8 +3,8 @@
  * The read path never imports this module.
  */
 import type { AutocompleteItem, CourseSection } from "@/lib/sis/types";
-import type { CatalogDetails } from "@/lib/sis/parse/catalogDetails";
 import type { D1Like, D1PreparedStatement } from "./types";
+import type { RestrictionRule, Fee } from "@/lib/sis/parse/sectionDetail";
 import { refreshTermUsualDates } from "./usualDates";
 import {
   isViewOnly,
@@ -367,246 +367,238 @@ export async function replaceFilterOptions(
   return items.length;
 }
 
-/**
- * Upserts the catalog facts for one course. Only the catalog columns are written
- * here (college/department/grading/schedule/credit + raw_catalog_html); the
- * description/prereq/coreq columns are left untouched so a later slice can fill
- * them without this overwriting them (and vice-versa).
- */
-export interface CourseUpsert {
-  catalog: CatalogDetails;
-  rawCatalogHtml: string;
-  description?: string | null;
-  prerequisites?: string | null;
-  corequisites?: string | null;
-  rawDescriptionHtml?: string | null;
-  rawPrereqHtml?: string | null;
-  rawCoreqHtml?: string | null;
-}
-
-/**
- * Upserts a course's catalog facts + text (description/prereqs/coreqs). Catalog
- * and text are fetched together in one ingest pass, so all columns are written
- * (and overwritten on conflict) in one statement.
- */
-export async function upsertCourse(
-  db: D1Like,
-  term: string,
-  campusDescription: string,
-  subject: string,
-  courseNumber: string,
-  data: CourseUpsert,
-  syncedAt: number
-): Promise<void> {
-  const { catalog } = data;
-  await db
-    .prepare(
-      `INSERT INTO course
-         (term, campus_description, subject, course_number, college_code,
-          college_name, department, department_code, grading_modes,
-          schedule_types, credit_breakdown, description, prerequisites,
-          corequisites, raw_catalog_html, raw_description_html, raw_prereq_html,
-          raw_coreq_html, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(term, campus_description, subject, course_number) DO UPDATE SET
-         college_code = excluded.college_code,
-         college_name = excluded.college_name,
-         department = excluded.department,
-         department_code = excluded.department_code,
-         grading_modes = excluded.grading_modes,
-         schedule_types = excluded.schedule_types,
-         credit_breakdown = excluded.credit_breakdown,
-         description = COALESCE(excluded.description, course.description),
-         prerequisites = COALESCE(excluded.prerequisites, course.prerequisites),
-         corequisites = COALESCE(excluded.corequisites, course.corequisites),
-         raw_catalog_html = excluded.raw_catalog_html,
-         raw_description_html = COALESCE(excluded.raw_description_html, course.raw_description_html),
-         raw_prereq_html = COALESCE(excluded.raw_prereq_html, course.raw_prereq_html),
-         raw_coreq_html = COALESCE(excluded.raw_coreq_html, course.raw_coreq_html),
-         synced_at = excluded.synced_at`
-    )
-    .bind(
-      term,
-      campusDescription,
-      subject,
-      courseNumber,
-      catalog.collegeCode,
-      catalog.collegeName,
-      catalog.department,
-      catalog.departmentCode,
-      JSON.stringify(catalog.gradingModes),
-      JSON.stringify(catalog.scheduleTypes),
-      JSON.stringify(catalog.creditBreakdown),
-      data.description ?? null,
-      data.prerequisites ?? null,
-      data.corequisites ?? null,
-      data.rawCatalogHtml,
-      data.rawDescriptionHtml ?? null,
-      data.rawPrereqHtml ?? null,
-      data.rawCoreqHtml ?? null,
-      syncedAt
-    )
-    .run();
-}
-
-export interface CourseTextUpdate {
-  description: string | null;
-  prerequisites: string | null;
-  corequisites: string | null;
-  rawDescriptionHtml: string | null;
-  rawPrereqHtml: string | null;
-  rawCoreqHtml: string | null;
-}
-
-/**
- * Updates ONLY the catalog-text columns of an existing `course` row (lazy
- * course-text path). COALESCE so a failed/empty fragment never overwrites
- * existing text; the catalog facts (college/department/…) are untouched, so this
- * can run without re-fetching getSectionCatalogDetails. `raw_description_html`
- * doubles as the "text fetched" marker that stops the lazy path refetching.
- */
-export async function updateCourseText(
-  db: D1Like,
-  term: string,
-  campusDescription: string,
-  subject: string,
-  courseNumber: string,
-  t: CourseTextUpdate,
-  syncedAt: number
-): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE course SET
-         description = COALESCE(?, description),
-         prerequisites = COALESCE(?, prerequisites),
-         corequisites = COALESCE(?, corequisites),
-         raw_description_html = COALESCE(?, raw_description_html),
-         raw_prereq_html = COALESCE(?, raw_prereq_html),
-         raw_coreq_html = COALESCE(?, raw_coreq_html),
-         synced_at = ?
-       WHERE term = ? AND campus_description = ? AND subject = ? AND course_number = ?`
-    )
-    .bind(
-      t.description,
-      t.prerequisites,
-      t.corequisites,
-      t.rawDescriptionHtml,
-      t.rawPrereqHtml,
-      t.rawCoreqHtml,
-      syncedAt,
-      term,
-      campusDescription,
-      subject,
-      courseNumber
-    )
-    .run();
-}
-
-export interface SectionDetailUpsert {
-  restrictions: unknown | null;
-  fees: unknown | null;
-  crossListCrns: string[] | null;
-  linkedCrns: string[] | null;
-  syllabus: string | null;
-  // Null when that fragment's live fetch failed (lazy path tolerates a single
-  // bad/unrecognized endpoint); the column is nullable.
-  rawRestrictionsHtml: string | null;
-  rawFeesHtml: string | null;
-  rawXlstHtml: string | null;
-  rawLinkedHtml: string | null;
-  rawSyllabusHtml: string | null;
-}
-
 const jsonOrNull = (v: unknown): string | null =>
   v == null ? null : JSON.stringify(v);
 
-/** Upserts the section-level detail (restrictions/fees/cross-list/linked/…). */
-export async function upsertSectionDetail(
+// ── per-fragment writers (hybrid crseavail + Banner ingest) ──────────────────
+// Each writes ONLY its own columns + synced_at + its own freshness timestamp, so
+// fragments sourced independently never clobber one another.
+
+export type CourseKey = { term: string; campus: string; subject: string; courseNumber: string };
+
+export interface CourseFacts {
+  collegeCode: string | null;
+  collegeName: string | null;
+  department: string | null;
+  departmentCode: string | null;
+  gradingModes: string[];
+  scheduleTypes: string[];
+  creditBreakdown: Record<string, number | null>;
+  description: string | null;
+}
+
+export async function upsertSectionRestrictions(
   db: D1Like,
   term: string,
   crn: string,
-  d: SectionDetailUpsert,
-  syncedAt: number
+  d: { restrictions: RestrictionRule[] | null; rawHtml: string | null },
+  at: number
 ): Promise<void> {
   await db
     .prepare(
       `INSERT INTO section_detail
-         (term, crn, restrictions_json, fees_json, cross_list_crns, linked_crns,
-          syllabus_text, raw_restrictions_html, raw_fees_html,
-          raw_xlst_html, raw_linked_html, raw_syllabus_html,
-          synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (term, crn, restrictions_json, raw_restrictions_html, restrictions_synced_at, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(term, crn) DO UPDATE SET
          restrictions_json = excluded.restrictions_json,
+         raw_restrictions_html = excluded.raw_restrictions_html,
+         restrictions_synced_at = excluded.restrictions_synced_at,
+         synced_at = excluded.synced_at`
+    )
+    .bind(term, crn, jsonOrNull(d.restrictions), d.rawHtml, at, at)
+    .run();
+}
+
+export async function upsertSectionExtras(
+  db: D1Like,
+  term: string,
+  crn: string,
+  d: {
+    fees: Fee[] | null;
+    linkedCrns: string[] | null;
+    syllabus: string | null;
+    rawFeesHtml: string | null;
+    rawLinkedHtml: string | null;
+    rawSyllabusHtml: string | null;
+  },
+  at: number
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO section_detail
+         (term, crn, fees_json, linked_crns, syllabus_text, raw_fees_html,
+          raw_linked_html, raw_syllabus_html, extras_synced_at, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(term, crn) DO UPDATE SET
          fees_json = excluded.fees_json,
-         cross_list_crns = excluded.cross_list_crns,
          linked_crns = excluded.linked_crns,
          syllabus_text = excluded.syllabus_text,
-         raw_restrictions_html = excluded.raw_restrictions_html,
          raw_fees_html = excluded.raw_fees_html,
-         raw_xlst_html = excluded.raw_xlst_html,
          raw_linked_html = excluded.raw_linked_html,
          raw_syllabus_html = excluded.raw_syllabus_html,
+         extras_synced_at = excluded.extras_synced_at,
          synced_at = excluded.synced_at`
     )
     .bind(
       term,
       crn,
-      jsonOrNull(d.restrictions),
       jsonOrNull(d.fees),
-      jsonOrNull(d.crossListCrns),
       jsonOrNull(d.linkedCrns),
       d.syllabus,
-      d.rawRestrictionsHtml,
       d.rawFeesHtml,
-      d.rawXlstHtml,
       d.rawLinkedHtml,
       d.rawSyllabusHtml,
-      syncedAt
+      at,
+      at
     )
     .run();
 }
 
-/** Upserts an instructor contact card. */
-export async function upsertInstructor(
+const CROSSLIST_CHUNK = 90;
+
+/** Cross-list writes for many sections in one batch per <=90 entries. */
+export async function upsertSectionCrossLists(
   db: D1Like,
-  card: {
-    bannerId: string;
-    displayName: string | null;
-    title: string | null;
-    department: string | null;
-    college: string | null;
-    email: string | null;
-    raw: unknown;
-  },
-  syncedAt: number
+  term: string,
+  entries: Array<{ crn: string; crossListCrns: string[] | null; rawXlstHtml?: string | null }>,
+  at: number
+): Promise<void> {
+  for (let i = 0; i < entries.length; i += CROSSLIST_CHUNK) {
+    const stmts = entries.slice(i, i + CROSSLIST_CHUNK).map((e) =>
+      db
+        .prepare(
+          `INSERT INTO section_detail
+             (term, crn, cross_list_crns, raw_xlst_html, crosslist_synced_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(term, crn) DO UPDATE SET
+             cross_list_crns = excluded.cross_list_crns,
+             raw_xlst_html = COALESCE(excluded.raw_xlst_html, section_detail.raw_xlst_html),
+             crosslist_synced_at = excluded.crosslist_synced_at,
+             synced_at = excluded.synced_at`
+        )
+        .bind(term, e.crn, jsonOrNull(e.crossListCrns), e.rawXlstHtml ?? null, at, at)
+    );
+    if (stmts.length) await db.batch(stmts);
+  }
+}
+
+export async function upsertCourseFacts(
+  db: D1Like,
+  key: CourseKey,
+  f: CourseFacts,
+  source: "crseavail" | "banner",
+  at: number
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO instructor
-         (banner_id, display_name, title, department, college, email, raw_json, synced_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(banner_id) DO UPDATE SET
-         display_name = excluded.display_name,
-         title = excluded.title,
-         department = excluded.department,
-         college = excluded.college,
-         email = excluded.email,
-         raw_json = excluded.raw_json,
+      `INSERT INTO course
+         (term, campus_description, subject, course_number, college_code,
+          college_name, department, department_code, grading_modes,
+          schedule_types, credit_breakdown, description, facts_synced_at,
+          facts_source, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(term, campus_description, subject, course_number) DO UPDATE SET
+         college_code = COALESCE(excluded.college_code, course.college_code),
+         college_name = COALESCE(excluded.college_name, course.college_name),
+         department = COALESCE(excluded.department, course.department),
+         department_code = COALESCE(excluded.department_code, course.department_code),
+         -- An empty incoming list never erases a stored non-empty one.
+         grading_modes = CASE WHEN excluded.grading_modes = '[]'
+           THEN COALESCE(course.grading_modes, '[]') ELSE excluded.grading_modes END,
+         schedule_types = CASE WHEN excluded.schedule_types = '[]'
+           THEN COALESCE(course.schedule_types, '[]') ELSE excluded.schedule_types END,
+         -- Unknown incoming credits (e.g. crseavail omitted creditHrLow) never
+         -- erase stored ones. Known ones are merged key by key (the last bound
+         -- value: the incoming breakdown without its null keys), so Banner's
+         -- creditHours-only breakdown keeps crseavail's range and hours.
+         credit_breakdown = CASE
+           WHEN json_extract(excluded.credit_breakdown, '$.creditHours') IS NULL
+           THEN COALESCE(course.credit_breakdown, excluded.credit_breakdown)
+           WHEN json_valid(course.credit_breakdown)
+           THEN json_patch(course.credit_breakdown, ?)
+           ELSE excluded.credit_breakdown END,
+         description = COALESCE(excluded.description, course.description),
+         facts_synced_at = excluded.facts_synced_at,
+         facts_source = excluded.facts_source,
          synced_at = excluded.synced_at`
     )
     .bind(
-      card.bannerId,
-      card.displayName,
-      card.title,
-      card.department,
-      card.college,
-      card.email,
-      JSON.stringify(card.raw),
-      syncedAt
+      key.term,
+      key.campus,
+      key.subject,
+      key.courseNumber,
+      f.collegeCode,
+      f.collegeName,
+      f.department,
+      f.departmentCode,
+      JSON.stringify(f.gradingModes),
+      JSON.stringify(f.scheduleTypes),
+      JSON.stringify(f.creditBreakdown),
+      f.description,
+      at,
+      source,
+      at,
+      // json_patch deletes a key whose patch value is null, so drop the nulls.
+      JSON.stringify(Object.fromEntries(Object.entries(f.creditBreakdown).filter(([, v]) => v !== null)))
     )
     .run();
 }
+
+export async function updateCourseDescription(
+  db: D1Like,
+  key: CourseKey,
+  d: { description: string | null; rawDescriptionHtml: string | null },
+  at: number
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE course SET
+         description = COALESCE(?, description),
+         raw_description_html = COALESCE(?, raw_description_html),
+         synced_at = ?
+       WHERE term = ? AND campus_description = ? AND subject = ? AND course_number = ?`
+    )
+    .bind(d.description, d.rawDescriptionHtml, at, key.term, key.campus, key.subject, key.courseNumber)
+    .run();
+}
+
+export async function updateCoursePrereqs(
+  db: D1Like,
+  key: CourseKey,
+  p: {
+    prerequisites: string | null;
+    corequisites: string | null;
+    rawPrereqHtml: string | null;
+    rawCoreqHtml: string | null;
+  },
+  at: number
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE course SET
+         prerequisites = ?,
+         corequisites = ?,
+         raw_prereq_html = ?,
+         raw_coreq_html = ?,
+         prereq_synced_at = ?,
+         synced_at = ?
+       WHERE term = ? AND campus_description = ? AND subject = ? AND course_number = ?`
+    )
+    .bind(
+      p.prerequisites,
+      p.corequisites,
+      p.rawPrereqHtml,
+      p.rawCoreqHtml,
+      at,
+      at,
+      key.term,
+      key.campus,
+      key.subject,
+      key.courseNumber
+    )
+    .run();
+}
+
 
 // ── term sync metadata ──────────────────────────────────────────────────────
 
@@ -675,7 +667,7 @@ export interface SyncRunHandle {
 export async function startSyncRun(
   db: D1Like,
   term: string,
-  kind: "full" | "terms" | "details",
+  kind: "full" | "terms" | "details" | "capture",
   startedAt: number
 ): Promise<SyncRunHandle> {
   const row = await db
@@ -697,12 +689,14 @@ export async function finishSyncRun(
     subjectsDone?: number;
     sectionsUpserted?: number;
     errorMessage?: string;
+    /** JSON summary (e.g. capture gap counts, crseavail health). */
+    notes?: string;
   }
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE sync_run SET finished_at = ?, status = ?, subjects_total = ?,
-         subjects_done = ?, sections_upserted = ?, error_message = ?
+         subjects_done = ?, sections_upserted = ?, error_message = ?, notes = ?
        WHERE id = ?`
     )
     .bind(
@@ -712,6 +706,7 @@ export async function finishSyncRun(
       fields.subjectsDone ?? null,
       fields.sectionsUpserted ?? null,
       fields.errorMessage ?? null,
+      fields.notes ?? null,
       handle.id
     )
     .run();

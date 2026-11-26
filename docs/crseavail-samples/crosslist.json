@@ -1,0 +1,74 @@
+[
+ {
+  "ssbsectCrseNumb": "1014",
+  "ssbsectCampCode": "HON",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "MAN",
+  "ssbsectSeqNumb": "001",
+  "ssbsectCrn": "20071",
+  "ssbsectSubjCode": "AS",
+  "ssrxlstCrn": "20071",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "XR-MAN-70054"
+ },
+ {
+  "ssbsectCrseNumb": "1010",
+  "ssbsectCampCode": "MAN",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "MAN",
+  "ssbsectSeqNumb": "001",
+  "ssbsectCrn": "70054",
+  "ssbsectSubjCode": "AS",
+  "ssrxlstCrn": "70054",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "XR-MAN-70054"
+ },
+ {
+  "ssbsectCrseNumb": "1012",
+  "ssbsectCampCode": "WOA",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "Z2B",
+  "ssbsectSeqNumb": "1",
+  "ssbsectCrn": "82864",
+  "ssbsectSubjCode": "AS",
+  "ssrxlstCrn": "82864",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "XR-MAN-70054"
+ },
+ {
+  "ssbsectCrseNumb": "2014",
+  "ssbsectCampCode": "HON",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "MAN",
+  "ssbsectSeqNumb": "001",
+  "ssbsectCrn": "20072",
+  "ssbsectSubjCode": "AS",
+  "ssrxlstCrn": "20072",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "XR-MAN-70055"
+ },
+ {
+  "ssbsectCrseNumb": "1614",
+  "ssbsectCampCode": "HON",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "HON",
+  "ssbsectSeqNumb": "0",
+  "ssbsectCrn": "20111",
+  "ssbsectSubjCode": "CHEM",
+  "ssrxlstCrn": "20111",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "HON 10"
+ },
+ {
+  "ssbsectCrseNumb": "161L4",
+  "ssbsectCampCode": "HON",
+  "ssbsectTermCode": "202710",
+  "ssbsectPtrmCode": "HON",
+  "ssbsectSeqNumb": "0",
+  "ssbsectCrn": "20112",
+  "ssbsectSubjCode": "CHEM",
+  "ssrxlstCrn": "20112",
+  "ssrxlstTermCode": "202710",
+  "ssrxlstXlstGroup": "HON 12"
+ }
+]

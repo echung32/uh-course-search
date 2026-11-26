@@ -17,17 +17,20 @@
  *   yarn ingest sync [--term 202730] [--delayMs 250] [--subjectsPerSession N]
  *   yarn ingest sync-details --term 202730 [--delayMs 250] [--no-sections] ...
  *   yarn ingest refresh-run [--term 202710] [--delayMs 200]
- *   yarn ingest backfill [--term 202700] [--delayMs 250] [--dryRun]
+ *   yarn ingest backfill [--term 202700] [--delayMs 250] [--maxMinutes 180] [--dryRun]
  *   yarn ingest backfill-attributes [--term 202710] [--force]
  *   yarn ingest usual-dates [--term 202710]
  *   yarn ingest rollups [--term 202710]
  *   yarn ingest prereqs [--term 202710]
  *   yarn ingest daily [--term 202710] [--delayMs 200]
+ *   yarn ingest crseavail-parity --term 202710   (read-only; calls crseavail even with CRSEAVAIL unset)
  *
  * `daily` is the home server's scheduled entry point (compose `cron` service):
  * the RefreshWorkflow sequence — refresh the term list + every mutable term,
  * recompute each refreshed term's analytics rollups, rebuild the primary
- * prerequisite graph. Exits non-zero if any term's sync errored.
+ * prerequisite graph. Each term's summary carries the per-fragment rolled
+ * counts and the crseavail health (`crseavail`: crseavail | degraded | off).
+ * Exits non-zero if any term's sync or details phase errored.
  */
 import { getDb, getAnalyticsDb } from "@/lib/db/client";
 import { refreshTerms } from "@/lib/ingest/terms";
@@ -38,6 +41,7 @@ import { backfillNextTerm } from "@/lib/ingest/backfill";
 import { backfillAttributes } from "@/lib/ingest/backfillAttributes";
 import { computeAllRollups, computeTermRollups } from "@/lib/ingest/rollups";
 import { buildAllPrereqGraphs } from "@/lib/ingest/prereqGraph";
+import { crseavailParity } from "@/lib/ingest/parity";
 import { refreshAllUsualDates, refreshTermUsualDates } from "@/lib/db/usualDates";
 
 type Flags = Record<string, string | boolean>;
@@ -114,6 +118,14 @@ async function main() {
       break;
     }
 
+    case "crseavail-parity": {
+      if (typeof flags.term !== "string") throw new Error("--term is required");
+      const report = await crseavailParity(db, flags.term, { log });
+      console.log(JSON.stringify(report, null, 2));
+      if (!report.pass) process.exitCode = 1;
+      break;
+    }
+
     case "refresh-run": {
       const result = await refreshMutableTerms(db, {
         terms: typeof flags.term === "string" ? [flags.term] : undefined,
@@ -131,6 +143,7 @@ async function main() {
         term: typeof flags.term === "string" ? flags.term : undefined,
         dryRun: flags.dryRun === true,
         delayMs: num(flags.delayMs) ?? 250,
+        maxMinutes: num(flags.maxMinutes),
         log,
       });
       console.log(JSON.stringify({ ok: true, ...result }, null, 2));
@@ -201,7 +214,9 @@ async function main() {
         rollups.push(t.term);
       }
       const prereqs = await buildAllPrereqGraphs(db, { log });
-      const failed = refresh.terms.filter((t) => t.syncStatus === "error").map((t) => t.term);
+      const failed = refresh.terms
+        .filter((t) => t.syncStatus === "error" || t.detailsStatus === "error")
+        .map((t) => t.term);
       console.log(
         JSON.stringify({ ok: failed.length === 0, failed, terms: refresh.terms, rollups, prereqs }, null, 2)
       );

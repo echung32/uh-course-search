@@ -1,10 +1,12 @@
 /**
  * POST /api/admin/refresh-run  (x-admin-secret required)
  *
- * Runs the scheduled metadata refresh (docs/plans/scheduled-refresh.md) on
- * demand — Tier A full sync + Tier B1 diff-driven details + rolling Tier B2.
- * The hourly RefreshWorkflow runs the same refreshMutableTerms() on the Worker;
- * this route is the manual / e2e entry point.
+ * Runs the daily refresh (lib/ingest/refresh.ts) on demand — Tier A full sync,
+ * then the per-fragment details refresh (crseavail course facts, B1 + rolling
+ * restrictions/extras, cross-list, prereqs). `yarn ingest daily` runs the same
+ * refreshMutableTerms(); this route is the manual / e2e entry point. Each
+ * term's summary includes restrictionsRolled / extrasRolled / prereqsRolled,
+ * crseavail, crossList and detailsStatus.
  *
  * Query params (all optional):
  *   - term=<code>   restrict to one term (also skips the leading refreshTerms).

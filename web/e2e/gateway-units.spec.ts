@@ -229,7 +229,10 @@ test("migrate-sqlite applies only unapplied migrations", () => {
     db.exec(`CREATE TABLE d1_migrations(
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
       applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)`);
-    const applied = readdirSync("migrations").filter((f) => f.endsWith(".sql")).sort().slice(0, 12);
+    // Every migration on disk, in apply order — derived, so new ones need no edit here.
+    const all = readdirSync("migrations").filter((f) => f.endsWith(".sql")).sort();
+    expect(all.length).toBeGreaterThan(12);
+    const applied = all.slice(0, 12);
     for (const name of applied) {
       db.exec(readFileSync(join("migrations", name), "utf8"));
       db.prepare("INSERT INTO d1_migrations (name) VALUES (?)").run(name);
@@ -246,8 +249,8 @@ test("migrate-sqlite applies only unapplied migrations", () => {
     const names = (after.prepare("SELECT name FROM d1_migrations ORDER BY id").all() as Array<{ name: string }>).map(
       (r) => r.name
     );
-    expect(names.at(-1)).toBe("0016_term_usual_dates.sql");
-    expect(names).toHaveLength(16);
+    // The 12 pre-applied ones kept their rows; the rest were applied in order.
+    expect(names).toEqual(all);
     const cols = (after.prepare("PRAGMA table_info(course_prereq)").all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toContain("ast_json");
     expect(cols).not.toContain("raw_text");

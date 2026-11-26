@@ -167,14 +167,8 @@ test("details sync persists filter options and course catalog", async ({ request
   expect(detail.linkedCrns).toBeNull();
   expect(detail.syllabus).toBeNull();
 
-  // Slice 4: instructor contact card (CRN 10005 has faculty banner_id 9001).
-  expect(body.instructors).toBe(1);
-  const instr = await request.get("/api/instructor", { params: { bannerId: "9001" } });
-  expect(instr.ok()).toBeTruthy();
-  const card = await instr.json();
-  expect(card.title).toBe("Associate Professor");
-  expect(card.department).toBe("Information & Computer Sciences");
-  expect(card.college).toBe("MAN-College of Natural Sciences");
+  // The contact-card pass was removed: no instructor rows are fetched.
+  expect(body.instructors).toBe(0);
 
   // Wrong campus for an existing course is a 404 (campus is part of the key).
   const wrongCampus = await request.get("/api/course", {
@@ -279,9 +273,9 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
   const advance = await request.post(`${MOCK_ORIGIN}/__mock/advance`);
   expect(advance.ok()).toBeTruthy();
 
-  // Run the scheduled refresh scoped to TERM (skips refreshTerms). Rolling Tier
-  // B2 now fires every refresh-run, refreshing the stalest detail CRNs up to the
-  // REFRESH_ROLLING_DETAIL_CRNS cap (default 250).
+  // Run the scheduled refresh scoped to TERM (skips refreshTerms). The rolling
+  // per-fragment passes fire every refresh-run, refreshing the stalest
+  // restrictions / extras CRNs up to their caps (defaults 500 / 300).
   const run = await request.post(`/api/admin/refresh-run?term=${TERM}&delayMs=0`, {
     headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
   });
@@ -310,11 +304,15 @@ test("scheduled refresh: diff-driven detail re-fetch (Tier B1)", async ({ reques
   const fetched = [...summary.detailFetchedCrns].sort();
   expect(fetched).toEqual(["10003", "10007"].sort());
 
-  // Rolling Tier B2 runs every refresh: it refreshes the stalest detail CRNs,
-  // bounded by REFRESH_ROLLING_DETAIL_CRNS (250). With 9 sections < cap, all roll.
-  // detailsRolled = total fetched minus B1 (new ∪ structural). 9 fetched − 2 B1 = 7.
+  // The rolling passes run every refresh, excluding B1: 9 sections − 2 B1 = 7
+  // rolled per fragment (both well under their caps).
   expect(summary.detailsFullPass).toBeUndefined();
-  expect(summary.detailsRolled).toBe(7);
+  expect(summary.detailsRolled).toBeUndefined();
+  expect(summary.restrictionsRolled).toBe(7);
+  expect(summary.extrasRolled).toBe(7);
+
+  // Course facts came from crseavail (the mock is in "ok" mode).
+  expect(summary.crseavail).toBe("crseavail");
 
   // Tier A delta-write counts (clean phase-1 → phase-2 diff):
   //   inserted 1 (10007), deleted 1 (10006), structural 1 (10003),
@@ -356,10 +354,10 @@ test("scheduled refresh: rolling Tier B2 refreshes stale details every run", asy
   const summary = body.terms.find((t: { term: string }) => t.term === TERM);
   expect(summary).toBeDefined();
 
-  // No full-pass flag anymore; rolling B2 reports a count instead. 9 sections < the
-  // 250 cap, so every stale detail CRN rolls.
+  // No B1 this run, so every CRN is stale for both rolling passes (9 < caps).
   expect(summary.detailsFullPass).toBeUndefined();
-  expect(summary.detailsRolled).toBe(9);
+  expect(summary.restrictionsRolled).toBe(9);
+  expect(summary.extrasRolled).toBe(9);
 
   // Delta-write no-op: mock unchanged from B1 → all 9 sections byte-identical.
   expect(summary.writes).toEqual({ inserted: 0, structural: 0, seatUpdated: 0, deleted: 0, unchanged: 9 });
@@ -372,31 +370,266 @@ test("scheduled refresh: rolling Tier B2 refreshes stale details every run", asy
   expect(unchanged.ok()).toBeTruthy();
 });
 
-test("backfill selects the newest view-only term missing details", async ({ request }) => {
-  // Fixture view-only terms (global-setup.ts): 202700 done (ok), 202695 failed
-  // (error → eligible), 202690 never-run (eligible), 202680 no catalog (skipped).
-  // dryRun = pure D1 selection, no Banner. Newest eligible is 202695.
-  const res = await request.post("/api/admin/backfill?dryRun=1", {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+test("daily refresh with crseavail failing still completes on Banner", async ({ request }) => {
+  const mode = await request.post(`${MOCK_ORIGIN}/__mock/crseavail?mode=http500`);
+  expect(mode.ok()).toBeTruthy();
+  // One Banner cross-list fallback fetch fails → the details phase is partial.
+  const fail = await request.post(`${MOCK_ORIGIN}/__mock/fail?endpoint=getXlstSections&crn=10002`);
+  expect(fail.ok()).toBeTruthy();
+  try {
+    const run = await request.post(`/api/admin/refresh-run?term=${TERM}&delayMs=0`, {
+      headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+    });
+    expect(run.ok()).toBeTruthy();
+    const body = await run.json();
+    expect(body.ok).toBe(true);
+    const summary = body.terms.find((t: { term: string }) => t.term === TERM);
+    expect(summary).toBeDefined();
+    expect(summary.syncStatus).toBe("ok");
+    // The preflight unit fails → breaker → every unit's courses go to Banner.
+    expect(summary.crseavail).toBe("degraded");
+    expect(summary.crossList).toBe("banner");
+    expect(summary.detailsStatus).toBe("partial");
+    expect(summary.restrictionsRolled).toBe(9);
+    expect(summary.extrasRolled).toBe(9);
+  } finally {
+    // /__mock/reset clears the fail rule + crseavail mode but rewinds the
+    // catalog: put it back on phase 2 for the rest of this serial file.
+    await request.post(`${MOCK_ORIGIN}/__mock/reset`);
+    await request.post(`${MOCK_ORIGIN}/__mock/advance`);
+  }
+});
+
+// ── Gap-driven capture (backfill driver) ───────────────────────────────────
+// Completeness is judged from the data: a section gap is a missing
+// restrictions/extras/crosslist stamp (no section_detail row = all three); a
+// course gap is a missing facts/prereq stamp (no course row = both).
+const ADMIN_HEADERS = { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" };
+const searchDb = () =>
+  new DatabaseSync(findLocalD1File("course_section"), { enableForeignKeyConstraints: false });
+
+/** Remaining section + course gaps for a term, read straight from the DB. */
+function termGapRows(term: string): { sections: number; sectionGaps: number; courseGaps: number } {
+  const db = searchDb();
+  try {
+    const sections = (
+      db.prepare("SELECT COUNT(*) AS n FROM course_section WHERE term = ?").get(term) as { n: number }
+    ).n;
+    const sectionGaps = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM course_section cs
+             LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
+            WHERE cs.term = ? AND (sd.restrictions_synced_at IS NULL
+               OR sd.extras_synced_at IS NULL OR sd.crosslist_synced_at IS NULL)`
+        )
+        .get(term) as { n: number }
+    ).n;
+    const courseGaps = (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM
+             (SELECT DISTINCT IFNULL(campus_description, '') AS campus, subject, course_number
+                FROM course_section WHERE term = ?) s
+             LEFT JOIN course c ON c.term = ? AND c.campus_description = s.campus
+              AND c.subject = s.subject AND c.course_number = s.course_number
+            WHERE c.facts_synced_at IS NULL OR c.prereq_synced_at IS NULL`
+        )
+        .get(term, term) as { n: number }
+    ).n;
+    return { sections, sectionGaps, courseGaps };
+  } finally {
+    db.close();
+  }
+}
+
+test("capture dry-run lists gap terms, active first", async ({ request }) => {
+  // Fixture view-only terms (global-setup.ts): 202700 complete (every fragment
+  // stamped + a course row) → absent; 202695/202690 catalog, no details →
+  // present; 202680 no sections → absent. dryRun = D1 only, no Banner.
+  const res = await request.post("/api/admin/backfill?dryRun=1", { headers: ADMIN_HEADERS });
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.ok).toBe(true);
+  const terms = body.terms as Array<{ code: string; isViewOnly: boolean; gaps: number }>;
+  expect(terms.length).toBeGreaterThan(0);
+  const codes = terms.map((t) => t.code);
+
+  // Active terms (202710 has seeded sections without details) come first: no
+  // view-only entry precedes an active one.
+  expect(terms[0].isViewOnly).toBe(false);
+  const firstViewOnly = terms.findIndex((t) => t.isViewOnly);
+  expect(firstViewOnly).toBeGreaterThan(0);
+  expect(terms.slice(firstViewOnly).every((t) => t.isViewOnly)).toBe(true);
+  // Newest first within the view-only group.
+  const vo = terms.filter((t) => t.isViewOnly).map((t) => t.code);
+  expect(vo).toEqual([...vo].sort().reverse());
+
+  expect(codes).not.toContain("202700");
+  expect(codes).toContain("202690");
+  expect(codes).not.toContain("202680");
+  for (const t of terms) expect(t.gaps).toBeGreaterThan(0);
+  // 202690: one section with no section_detail (3) and no course row (2).
+  expect(terms.find((t) => t.code === "202690")!.gaps).toBe(5);
+
+  expect(body.term).toBe(terms[0].code);
+  expect(body.done).toBe(false);
+  expect(body.remaining).toBe(terms.length);
+  expect(body.capture).toBeUndefined();
+  expect(body.catalogMissing).toBeUndefined();
+
+  // `term=` overrides the selection (dryRun still reports without running).
+  const forced = await request.post("/api/admin/backfill?dryRun=1&term=202700", { headers: ADMIN_HEADERS });
+  const forcedBody = await forced.json();
+  expect(forcedBody.term).toBe("202700");
+  expect(forcedBody.capture).toBeUndefined();
+});
+
+test("capture fills every gap for a term and reports ok", async ({ request }) => {
+  // Open real gaps in TERM: two CRNs lose their section_detail row, the MATH
+  // course rows vanish, and one course loses its prereq stamp.
+  const db = searchDb();
+  try {
+    db.prepare("DELETE FROM section_detail WHERE term = ? AND crn IN ('10001', '20001')").run(TERM);
+    db.prepare("DELETE FROM course WHERE term = ? AND subject = 'MATH'").run(TERM);
+    db.prepare("UPDATE course SET prereq_synced_at = NULL WHERE term = ? AND course_number = '311'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const before = termGapRows(TERM);
+  expect(before.sectionGaps).toBe(2);
+  expect(before.courseGaps).toBeGreaterThan(1);
+
+  const started = Date.now();
+  const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+    headers: ADMIN_HEADERS,
   });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
-  expect(body).toMatchObject({
-    ok: true,
-    term: "202695", // newest eligible (202700 excluded: ok details run)
-    done: false,
-    remaining: 2, // 202695 + 202690
-    catalogMissing: 1, // 202680 has no course_section
-  });
-  // dryRun must not touch Banner → no details sub-result.
-  expect(body.details).toBeUndefined();
+  expect(body.ok).toBe(true);
+  expect(body.term).toBe(TERM);
+  expect(body.capture).toMatchObject({ term: TERM, status: "ok", gapsAfter: 0, stoppedEarly: false });
+  expect(body.capture.gapsBefore).toBeGreaterThanOrEqual(2 * 3 + before.courseGaps);
+  expect(body.capture.progress).toBe(body.capture.gapsBefore);
 
-  // Forcing the done term still selects it (manual override), proving `term=`
-  // bypasses the auto-selection (dryRun reports it without running).
-  const forced = await request.post("/api/admin/backfill?dryRun=1&term=202700", {
-    headers: { "x-admin-secret": ADMIN_SECRET, "content-type": "application/json" },
+  // Every CRN has all three fragment stamps; every course has facts + prereqs.
+  const after = termGapRows(TERM);
+  expect(after.sections).toBeGreaterThan(0);
+  expect(after.sectionGaps).toBe(0);
+  expect(after.courseGaps).toBe(0);
+
+  // One sync_run kind='capture' with the gap counts in notes.
+  const check = searchDb();
+  try {
+    const run = check
+      .prepare(
+        "SELECT status, notes FROM sync_run WHERE term = ? AND kind = 'capture' AND started_at >= ? ORDER BY id DESC"
+      )
+      .all(TERM, started) as Array<{ status: string; notes: string }>;
+    expect(run).toHaveLength(1);
+    expect(run[0].status).toBe("ok");
+    expect(JSON.parse(run[0].notes)).toMatchObject({
+      gapsBefore: body.capture.gapsBefore,
+      gapsAfter: 0,
+      progress: body.capture.gapsBefore,
+    });
+  } finally {
+    check.close();
+  }
+});
+
+test("capture resumes without refetching completed items", async ({ request }) => {
+  type Stamps = { r: number; e: number | null; x: number };
+  const stamps = (crn: string): Stamps => {
+    const db = searchDb();
+    try {
+      return db
+        .prepare(
+          `SELECT restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x
+             FROM section_detail WHERE term = ? AND crn = ?`
+        )
+        .get(TERM, crn) as Stamps;
+    } finally {
+      db.close();
+    }
+  };
+  const db = searchDb();
+  try {
+    db.prepare("UPDATE section_detail SET extras_synced_at = NULL WHERE term = ? AND crn = '10002'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const other = stamps("10003");
+  const target = stamps("10002");
+
+  const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+    headers: ADMIN_HEADERS,
   });
-  expect((await forced.json()).term).toBe("202700");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  expect(body.capture).toMatchObject({ gapsBefore: 1, progress: 1, gapsAfter: 0, status: "ok" });
+
+  // Only the missing fragment was fetched: everything else keeps its stamp.
+  expect(stamps("10003")).toEqual(other);
+  const refreshed = stamps("10002");
+  expect(refreshed.e).not.toBeNull();
+  expect(refreshed.r).toBe(target.r);
+  expect(refreshed.x).toBe(target.x);
+});
+
+test("a zero-progress term is skipped", async ({ request }) => {
+  const db = searchDb();
+  try {
+    db.prepare("UPDATE section_detail SET restrictions_synced_at = NULL WHERE term = ? AND crn = '10003'").run(TERM);
+  } finally {
+    db.close();
+  }
+  const fail = await request.post(`${MOCK_ORIGIN}/__mock/fail?endpoint=getRestrictions&crn=10003`);
+  expect(fail.ok()).toBeTruthy();
+  try {
+    const res = await request.post(`/api/admin/backfill?term=${TERM}&delayMs=0&maxMinutes=30`, {
+      headers: ADMIN_HEADERS,
+    });
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(body.capture).toMatchObject({ gapsBefore: 1, progress: 0, gapsAfter: 1, status: "partial" });
+
+    // The next selection skips it: same gap count as a zero-progress capture.
+    const dry = await request.post("/api/admin/backfill?dryRun=1", { headers: ADMIN_HEADERS });
+    const codes = ((await dry.json()).terms as Array<{ code: string }>).map((t) => t.code);
+    expect(codes).not.toContain(TERM);
+    expect(codes).toContain("202690");
+  } finally {
+    // Clear the fail rule; /__mock/reset also rewinds the catalog, so put it
+    // back on phase 2 for the rest of this serial file.
+    await request.post(`${MOCK_ORIGIN}/__mock/reset`);
+    await request.post(`${MOCK_ORIGIN}/__mock/advance`);
+  }
+});
+
+test("section view fetches only missing extras", async ({ request }) => {
+  const sentinel = '[{"rule":"must","category":"Sentinel","values":[]}]';
+  const db = searchDb();
+  try {
+    db.prepare(
+      "UPDATE section_detail SET extras_synced_at = NULL, fees_json = NULL, restrictions_json = ? WHERE term = ? AND crn = '10002'"
+    ).run(sentinel, TERM);
+  } finally {
+    db.close();
+  }
+  const res = await request.get("/api/section", { params: { term: TERM, crn: "10002" } });
+  expect(res.status()).toBe(200);
+  expect(JSON.stringify((await res.json()).fees)).toContain("Course Fee");
+  const check = searchDb();
+  try {
+    const row = check
+      .prepare("SELECT restrictions_json, extras_synced_at FROM section_detail WHERE term = ? AND crn = '10002'")
+      .get(TERM) as { restrictions_json: string; extras_synced_at: number | null };
+    expect(row.restrictions_json).toContain("Sentinel");
+    expect(row.extras_synced_at).not.toBeNull();
+  } finally {
+    check.close();
+  }
 });
 
 test("backfill admin route requires the secret", async ({ request }) => {
@@ -532,6 +765,32 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
   // The home server's cron entry point: the RefreshWorkflow sequence run from
   // the Node CLI straight against the SQLite files. Scoped to TERM so the
   // read-path fixtures are untouched.
+  //
+  // Cursor check (caps of 1): the rolling passes pick the stalest by their OWN
+  // fragment stamp, not section_detail.synced_at (which the cross-list write
+  // bumps for every CRN). Every stamp is set recent, then 10004 loses its
+  // restrictions stamp (but gets the NEWEST synced_at), 10005 gets the oldest
+  // extras stamp, and ICS 311 loses its prereq stamp → each is the one picked.
+  // ICS 111 and ICS 141 get a stale description, so crseavail reports both as
+  // changed — but the prereq cap (1) admits only one of them.
+  const recent = Date.now() - 1000;
+  const seed = searchDb();
+  try {
+    seed
+      .prepare("UPDATE section_detail SET restrictions_synced_at = ?, extras_synced_at = ?, synced_at = ? WHERE term = ?")
+      .run(recent, recent, recent, TERM);
+    seed.prepare("UPDATE course SET prereq_synced_at = ? WHERE term = ?").run(recent, TERM);
+    seed
+      .prepare("UPDATE section_detail SET restrictions_synced_at = NULL, synced_at = ? WHERE term = ? AND crn = '10004'")
+      .run(recent + 500, TERM);
+    seed.prepare("UPDATE section_detail SET extras_synced_at = 1 WHERE term = ? AND crn = '10005'").run(TERM);
+    seed.prepare("UPDATE course SET prereq_synced_at = NULL WHERE term = ? AND subject = 'ICS' AND course_number = '311'").run(TERM);
+    seed
+      .prepare("UPDATE course SET description = 'old' WHERE term = ? AND subject = 'ICS' AND course_number IN ('111', '141')")
+      .run(TERM);
+  } finally {
+    seed.close();
+  }
   const started = Date.now();
   const out = execFileSync("yarn", ["ingest", "daily", "--term", TERM, "--delayMs", "0"], {
     encoding: "utf8",
@@ -541,12 +800,26 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       SEARCH_D1_LOCAL_FILE: findLocalD1File("course_section"),
       ANALYTICS_D1_LOCAL_FILE: findLocalD1File("course_term_stats"),
       SIS_BASE_URL: "http://127.0.0.1:9999/StudentRegistrationSsb",
+      CRSEAVAIL: "1",
+      CRSEAVAIL_BASE_URL: `${MOCK_ORIGIN}/crseavail/api`,
+      CRSEAVAIL_DELAY_MS: "0",
+      REFRESH_ROLLING_RESTRICTION_CRNS: "1",
+      REFRESH_ROLLING_EXTRAS_CRNS: "1",
+      REFRESH_ROLLING_PREREQ_COURSES: "1",
       LOG_SOURCE: "0",
     },
   });
   const result = JSON.parse(out.slice(out.indexOf("{")));
   expect(result.ok).toBe(true);
   expect(result.terms.map((t: { term: string }) => t.term)).toEqual([TERM]);
+  expect(result.terms[0]).toMatchObject({
+    crseavail: "crseavail",
+    crossList: "crseavail",
+    detailsStatus: "ok",
+    restrictionsRolled: 1,
+    extrasRolled: 1,
+    prereqsRolled: 1,
+  });
   expect(result.rollups).toEqual([TERM]);
   expect(Array.isArray(result.prereqs)).toBe(true);
 
@@ -557,6 +830,28 @@ test("daily command refreshes, rolls up, and builds prereqs", () => {
       .prepare("SELECT COUNT(*) AS n FROM sync_run WHERE term = ? AND started_at >= ?")
       .get(TERM, started) as { n: number };
     expect(run.n).toBeGreaterThan(0);
+    const frag = (crn: string) =>
+      db
+        .prepare("SELECT restrictions_synced_at AS r, extras_synced_at AS e FROM section_detail WHERE term = ? AND crn = ?")
+        .get(TERM, crn) as { r: number | null; e: number | null };
+    expect(frag("10004").r).toBeGreaterThanOrEqual(started);
+    expect(frag("10005").e).toBeGreaterThanOrEqual(started);
+    const prereq = db
+      .prepare("SELECT prereq_synced_at AS p FROM course WHERE term = ? AND subject = 'ICS' AND course_number = '311'")
+      .get(TERM) as { p: number | null };
+    expect(prereq.p).toBeGreaterThanOrEqual(started);
+    // Prereq fetches this run: ICS 311 (stale) + exactly one changed description.
+    const refetched = db
+      .prepare("SELECT subject || ' ' || course_number AS c FROM course WHERE term = ? AND prereq_synced_at >= ? ORDER BY 1")
+      .all(TERM, started) as Array<{ c: string }>;
+    expect(refetched).toHaveLength(2);
+    expect(refetched.map((r) => r.c)).toContain("ICS 311");
+    expect(refetched.filter((r) => r.c === "ICS 111" || r.c === "ICS 141")).toHaveLength(1);
+    // The details run records the crseavail health in sync_run.notes.
+    const notes = db
+      .prepare("SELECT notes FROM sync_run WHERE term = ? AND kind = 'details' AND started_at >= ? ORDER BY id DESC")
+      .get(TERM, started) as { notes: string };
+    expect(JSON.parse(notes.notes)).toMatchObject({ crseavail: "ok", crosslist: "crseavail" });
     const stats = adb
       .prepare("SELECT MAX(synced_at) AS s FROM course_term_stats WHERE term = ?")
       .get(TERM) as { s: number | null };

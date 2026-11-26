@@ -1,0 +1,42 @@
+[
+ {
+  "stvsubjDesc": "Anthropology",
+  "ssbsectCampCode": "MAN",
+  "stvsubjCode": "ANTH",
+  "stvtermDesc": "Spring 2027 Extension",
+  "stvtermCode": "202733",
+  "countStvtermCode": 1
+ },
+ {
+  "stvsubjDesc": "Architecture",
+  "ssbsectCampCode": "MAN",
+  "stvsubjCode": "ARCH",
+  "stvtermDesc": "Spring 2027 Extension",
+  "stvtermCode": "202733",
+  "countStvtermCode": 11
+ },
+ {
+  "stvsubjDesc": "American Sign Language",
+  "ssbsectCampCode": "MAN",
+  "stvsubjCode": "ASL",
+  "stvtermDesc": "Spring 2027 Extension",
+  "stvtermCode": "202733",
+  "countStvtermCode": 1
+ },
+ {
+  "stvsubjDesc": "Communicology",
+  "ssbsectCampCode": "MAN",
+  "stvsubjCode": "COMG",
+  "stvtermDesc": "Spring 2027 Extension",
+  "stvtermCode": "202733",
+  "countStvtermCode": 1
+ },
+ {
+  "stvsubjDesc": "Communication Sci & Disorders",
+  "ssbsectCampCode": "MAN",
+  "stvsubjCode": "CSD",
+  "stvtermDesc": "Spring 2027 Extension",
+  "stvtermCode": "202733",
+  "countStvtermCode": 2
+ }
+]

@@ -199,9 +199,116 @@ CATALOG_PHASE2.find((s) => s.courseReferenceNumber === "10005").faculty = [
   },
 ];
 
+// 10004 (ICS 211, in neither phase's diff) carries one meeting with a campus
+// code, so the crseavail campus map resolves "Manoa" → "MAN" from raw_json.
+for (const cat of [CATALOG, CATALOG_PHASE2]) {
+  cat.find((s) => s.courseReferenceNumber === "10004").meetingsFaculty = [
+    { meetingTime: { campus: "MAN", meetingScheduleType: "LEC" } },
+  ];
+}
+
 // Active catalog phase (1 = CATALOG, 2 = CATALOG_PHASE2).
 let catalogPhase = 1;
 const activeCatalog = () => (catalogPhase === 1 ? CATALOG : CATALOG_PHASE2);
+
+// ── crseavail (Class Availability API) mock ─────────────────────────────────
+// Mirrors the real API: every call needs an X-Recaptcha-Token header (400 JSON
+// without it), a missing/bad parameter yields `200 []`, and course-level
+// endpoints return one row per SECTION keyed by ssbsectCrn1. A global mode
+// (POST /__mock/crseavail?mode=[&subject=]) makes it misbehave — for every
+// call, or with `subject` only for that subject's unit calls; tests reset it to "ok".
+const CRSEAVAIL_BASE = "/crseavail/api";
+const CA_MODES = ["ok", "empty", "html", "http500", "shape", "short"];
+let crseavailMode = "ok";
+let crseavailModeSubject = null;
+
+const CA_COLLEGE = { ICS: "14", MATH: "20" };
+
+/** Same text the Banner getCourseDescription fragment yields (parity). */
+const caDescription = (sec) => `${sec.courseTitle}. An introductory course.\n`;
+
+function caRows(endpoint, params) {
+  if (endpoint === "subjects") {
+    return SUBJECTS.map((s) => ({
+      stvtermCode: "202730",
+      stvtermDesc: "Spring 2026",
+      ssbsectCampCode: "MAN",
+      stvsubjCode: s.code,
+      stvsubjDesc: s.description,
+      countStvtermCode: activeCatalog().filter((x) => x.subject === s.code).length,
+    }));
+  }
+  const term = params.get("termCode");
+  if (!term) return [];
+  if (endpoint === "crosslist") {
+    return ["10001", "10002"].map((crn) => ({
+      ssbsectCrseNumb: "111",
+      ssbsectCampCode: "MAN",
+      ssbsectTermCode: term,
+      ssbsectCrn: crn,
+      ssbsectSubjCode: "ICS",
+      ssrxlstCrn: crn,
+      ssrxlstTermCode: term,
+      ssrxlstXlstGroup: "XM-MAN-10001",
+    }));
+  }
+  const subject = params.get("subjectCode");
+  const campus = params.get("campusCode");
+  if (!subject || campus !== "MAN") return [];
+  const secs = activeCatalog().filter((s) => s.subject === subject);
+  if (endpoint === "courses") {
+    return secs.map((s) => ({
+      ssbsectCrn1: s.courseReferenceNumber,
+      crseNumb: s.courseNumber,
+      subjCode: s.subject,
+      collCode: CA_COLLEGE[s.subject] ?? null,
+      deptCode: s.subject,
+      creditHrLow: 3,
+      lecHrLow: 3,
+      billHrLow: 3,
+    }));
+  }
+  if (endpoint === "course-desc") {
+    return secs.map((s) => ({ ssbsectCrn1: s.courseReferenceNumber, textNarrative: caDescription(s) }));
+  }
+  if (endpoint === "course-grading") {
+    return secs.flatMap((s) => [
+      { ssbsectCrn1: s.courseReferenceNumber, gmodCode: "A", desc: "Audit" },
+      { ssbsectCrn1: s.courseReferenceNumber, gmodCode: "G", desc: "Letter Plus + Minus" },
+    ]);
+  }
+  return null; // unmapped endpoint
+}
+
+function handleCrseavail(req, res, url) {
+  if (!req.headers["x-recaptcha-token"]) {
+    return sendJson(res, 400, { status: 400, error: "Bad Request", message: "Missing X-Recaptcha-Token" });
+  }
+  const endpoint = url.pathname.slice(CRSEAVAIL_BASE.length + 1);
+  const rows = caRows(endpoint, url.searchParams);
+  if (rows === null) return sendJson(res, 404, { status: 404, error: "Not Found" });
+  // subject "*" = every per-unit endpoint (those carry subjectCode), leaving the term-wide crosslist alone.
+  const scoped =
+    crseavailModeSubject !== null &&
+    (crseavailModeSubject === "*"
+      ? !url.searchParams.has("subjectCode")
+      : url.searchParams.get("subjectCode") !== crseavailModeSubject);
+  switch (scoped ? "ok" : crseavailMode) {
+    case "empty":
+      return sendJson(res, 200, []);
+    case "html":
+      return sendHtml(res, 200, "<!doctype html><html><body>Please verify you are human.</body></html>");
+    case "http500":
+      return sendJson(res, 500, { status: 500, error: "Internal Server Error" });
+    case "shape":
+      // Rows missing a required field (the CRN key every endpoint carries).
+      return sendJson(res, 200, rows.map(({ ssbsectCrn1, ssbsectCrn, ...rest }) => rest));
+    case "short":
+      return sendJson(res, 200, rows.slice(0, Math.floor(rows.length / 2)));
+    default:
+      return sendJson(res, 200, rows);
+  }
+}
 
 // Per-session server-side state, keyed by JSESSIONID.
 // storedCriteria === null means "fresh form" (just reset or just initialized).
@@ -232,12 +339,23 @@ function sendHtml(res, status, html, extraHeaders = {}) {
 }
 
 function readBody(req) {
-  return new Promise((resolve) => {
+  // Cached so the fail-rule check and a route handler can both read the body.
+  req._bodyPromise ??= new Promise((resolve) => {
     let data = "";
     req.on("data", (chunk) => (data += chunk));
     req.on("end", () => resolve(data));
   });
+  return req._bodyPromise;
 }
+
+// POST /__mock/fail?endpoint=<basename>&crn=<crn> makes that Banner endpoint
+// answer 500 for that CRN; rules accumulate until /__mock/reset.
+const failRules = new Set();
+
+// Per-route request counters (Banner paths without the /StudentRegistrationSsb
+// prefix, crseavail paths in full), read via GET /__mock/counts and zeroed by
+// /__mock/reset — the request-count tests assert exact numbers.
+const counts = new Map();
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -246,10 +364,56 @@ const server = createServer(async (req, res) => {
   // Health check used by Playwright's webServer readiness probe.
   if (path === "/health") return sendJson(res, 200, { ok: true });
 
+  if (req.method === "GET" && path === "/__mock/counts") {
+    return sendJson(res, 200, { counts: Object.fromEntries(counts) });
+  }
+  if (!path.startsWith("/__mock/")) counts.set(path, (counts.get(path) ?? 0) + 1);
+
   // Control endpoint: advance to catalog phase 2.
   if (req.method === "POST" && path === "/__mock/advance") {
     catalogPhase = 2;
     return sendJson(res, 200, { ok: true, phase: catalogPhase });
+  }
+
+  // Control endpoint: back to the baseline (catalog phase 1, crseavail "ok").
+  if (req.method === "POST" && path === "/__mock/reset") {
+    catalogPhase = 1;
+    crseavailMode = "ok";
+    crseavailModeSubject = null;
+    failRules.clear();
+    counts.clear();
+    return sendJson(res, 200, { ok: true, phase: catalogPhase, crseavail: crseavailMode });
+  }
+
+  // Control endpoint: make one Banner fragment endpoint fail for one CRN.
+  if (req.method === "POST" && path === "/__mock/fail") {
+    const endpoint = url.searchParams.get("endpoint");
+    const crn = url.searchParams.get("crn");
+    if (!endpoint || !crn) return sendJson(res, 400, { error: "endpoint and crn required" });
+    failRules.add(`${endpoint}|${crn}`);
+    return sendJson(res, 200, { ok: true, rules: failRules.size });
+  }
+
+  // Injected Banner fragment failures.
+  if (req.method === "POST" && failRules.size > 0 && path.startsWith("/ssb/searchResults/")) {
+    const crn = new URLSearchParams(await readBody(req)).get("courseReferenceNumber") ?? "";
+    if (failRules.has(`${path.slice("/ssb/searchResults/".length)}|${crn}`)) {
+      return sendJson(res, 500, { error: "injected failure" });
+    }
+  }
+
+  // Control endpoint: crseavail behavior (ok|empty|html|http500|shape|short).
+  if (req.method === "POST" && path === "/__mock/crseavail") {
+    const mode = url.searchParams.get("mode") ?? "ok";
+    if (!CA_MODES.includes(mode)) return sendJson(res, 400, { error: `unknown mode: ${mode}` });
+    crseavailMode = mode;
+    crseavailModeSubject = url.searchParams.get("subject");
+    return sendJson(res, 200, { ok: true, crseavail: crseavailMode, subject: crseavailModeSubject });
+  }
+
+  // Class Availability API (crseavail).
+  if (req.method === "GET" && url.pathname.startsWith(`${CRSEAVAIL_BASE}/`)) {
+    return handleCrseavail(req, res, url);
   }
 
   // Phase 1: termSelection — issue cookies + Token_A.
@@ -388,10 +552,12 @@ const server = createServer(async (req, res) => {
   if (path === "/ssb/searchResults/getXlstSections") {
     const body = await readBody(req);
     const crn = new URLSearchParams(body).get("courseReferenceNumber") ?? "";
-    // CRN 10001 (ICS 111 §001) is cross-listed with 10002.
+    // CRN 10001 (ICS 111 §001) is cross-listed with 10002, and vice versa (as real Banner is symmetric).
     const rows = crn === "10001"
       ? "<tr><td>10002</td><td>ICS</td><td>111</td><td>Intro</td><td>002</td></tr>"
-      : "";
+      : crn === "10002"
+        ? "<tr><td>10001</td><td>ICS</td><td>111</td><td>Intro</td><td>001</td></tr>"
+        : "";
     return sendHtml(
       res,
       200,

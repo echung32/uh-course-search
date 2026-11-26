@@ -27,3 +27,10 @@ export function logDb(msg: string): void {
 export function logSis(msg: string): void {
   if (enabled) console.log(`${SIS_TAG} ${msg}`);
 }
+
+const CA_TAG = "\x1b[35m[CA]\x1b[0m"; // magenta
+
+/** Required a crseavail (Class Availability API) call. */
+export function logCa(msg: string): void {
+  if (enabled) console.log(`${CA_TAG} ${msg}`);
+}

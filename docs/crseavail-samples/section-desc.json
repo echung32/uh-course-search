@@ -1,0 +1,32 @@
+[
+ {
+  "ssbsectSeqNumb1": "001",
+  "seqno": 1,
+  "ssbsectVoiceAvail1": "Y",
+  "ssbsectCrn1": "79292",
+  "ssbsectTermCode1": "202710",
+  "ssbsectCrseNumb1": "691G0",
+  "ssbsectCampCode1": "MAN",
+  "ssbsectSstsCode1": "A",
+  "ssbsectPrntInd1": "Y",
+  "text": "!(Computational Genomics)",
+  "ssbsectSubjCode1": "ICS",
+  "crn": "79292",
+  "termCode": "202710"
+ },
+ {
+  "ssbsectSeqNumb1": "001",
+  "seqno": 1,
+  "ssbsectVoiceAvail1": "Y",
+  "ssbsectCrn1": "83355",
+  "ssbsectTermCode1": "202710",
+  "ssbsectCrseNumb1": "691C0",
+  "ssbsectCampCode1": "MAN",
+  "ssbsectSstsCode1": "A",
+  "ssbsectPrntInd1": "Y",
+  "text": "!(Generative AI Models)",
+  "ssbsectSubjCode1": "ICS",
+  "crn": "83355",
+  "termCode": "202710"
+ }
+]

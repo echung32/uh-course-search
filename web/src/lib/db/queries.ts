@@ -13,6 +13,7 @@ import type {
   TermListItem,
 } from "@/lib/sis/types";
 import type { D1Like } from "./types";
+import type { CourseKey } from "./upsert";
 import { campusDescriptionForCode } from "@/lib/campuses";
 import { rowToCourseSection } from "./mappers";
 
@@ -384,27 +385,30 @@ export interface SectionDetail {
   syllabus: string | null;
 }
 
-/** Section-level detail (restrictions/fees/cross-list/…); null if not ingested. */
-export async function getSectionDetail(
-  db: D1Like,
-  term: string,
-  crn: string
-): Promise<SectionDetail | null> {
-  const row = await db
+type SectionDetailRow = {
+  restrictions_json: string | null;
+  fees_json: string | null;
+  cross_list_crns: string | null;
+  linked_crns: string | null;
+  syllabus_text: string | null;
+  r: number | null;
+  e: number | null;
+  x: number | null;
+};
+
+/** One query: the detail columns plus the three per-fragment freshness stamps. */
+async function readSectionDetailRow(db: D1Like, term: string, crn: string) {
+  return db
     .prepare(
-      `SELECT restrictions_json, fees_json, cross_list_crns, linked_crns,
-              syllabus_text
+      `SELECT restrictions_json, fees_json, cross_list_crns, linked_crns, syllabus_text,
+              restrictions_synced_at AS r, extras_synced_at AS e, crosslist_synced_at AS x
          FROM section_detail WHERE term = ? AND crn = ?`
     )
     .bind(term, crn)
-    .first<{
-      restrictions_json: string | null;
-      fees_json: string | null;
-      cross_list_crns: string | null;
-      linked_crns: string | null;
-      syllabus_text: string | null;
-    }>();
-  if (!row) return null;
+    .first<SectionDetailRow>();
+}
+
+function toSectionDetail(term: string, crn: string, row: SectionDetailRow): SectionDetail {
   const j = (s: string | null): unknown =>
     s == null ? null : (() => { try { return JSON.parse(s); } catch { return null; } })();
   return {
@@ -418,84 +422,252 @@ export async function getSectionDetail(
   };
 }
 
-/**
- * The CRNs whose section detail is stalest for a term — the rolling Tier B2
- * cursor (docs/plans/scheduled-refresh.md). Never-fetched sections (no
- * section_detail row) sort first via COALESCE(...,0); then oldest synced_at.
- * Sized by the caller so a term fully cycles within the freshness window.
- */
-export async function getStaleDetailCrns(
+/** Section-level detail (restrictions/fees/cross-list/…); null if not ingested. */
+export async function getSectionDetail(
   db: D1Like,
   term: string,
-  limit: number
+  crn: string
+): Promise<SectionDetail | null> {
+  const row = await readSectionDetailRow(db, term, crn);
+  return row ? toSectionDetail(term, crn, row) : null;
+}
+
+/** Section detail plus per-fragment-group freshness (null when no row exists). */
+export async function getSectionDetailState(
+  db: D1Like,
+  term: string,
+  crn: string
+): Promise<{
+  detail: SectionDetail;
+  restrictionsSyncedAt: number | null;
+  extrasSyncedAt: number | null;
+  crosslistSyncedAt: number | null;
+} | null> {
+  const row = await readSectionDetailRow(db, term, crn);
+  if (!row) return null;
+  return {
+    detail: toSectionDetail(term, crn, row),
+    restrictionsSyncedAt: row.r ?? null,
+    extrasSyncedAt: row.e ?? null,
+    crosslistSyncedAt: row.x ?? null,
+  };
+}
+
+/**
+ * The CRNs whose `column` fragment is stalest for a term — a rolling refresh
+ * cursor (spec §6.2). Never-fetched CRNs (no section_detail row, or a NULL
+ * stamp) sort first via COALESCE(...,0); then the oldest stamp. `exclude` (e.g.
+ * this run's B1 set) is filtered in JS rather than bound, so a large list can't
+ * exceed the remote-D1 bound-parameter cap: over-fetch by its length, drop, cap.
+ */
+export async function getStaleSectionCrns(
+  db: D1Like,
+  term: string,
+  column: "restrictions_synced_at" | "extras_synced_at",
+  limit: number,
+  exclude: string[]
 ): Promise<string[]> {
+  if (limit <= 0) return [];
+  // `column` is a closed union, never user input — safe to interpolate.
   const { results } = await db
     .prepare(
       `SELECT cs.crn AS crn
          FROM course_section cs
          LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
         WHERE cs.term = ?
-        ORDER BY COALESCE(sd.synced_at, 0) ASC, cs.crn ASC
+        ORDER BY COALESCE(sd.${column}, 0) ASC, cs.crn ASC
+        LIMIT ?`
+    )
+    .bind(term, limit + exclude.length)
+    .all<{ crn: string }>();
+  const skip = new Set(exclude);
+  return results.map((r) => r.crn).filter((c) => !skip.has(c)).slice(0, limit);
+}
+
+/**
+ * The courses whose prereqs/coreqs are stalest for a term — the rolling prereq
+ * cursor: NULL `prereq_synced_at` first, then the oldest. Only course rows that
+ * still have a section this term: the prereq write is an UPDATE fetched on the
+ * course's MIN(crn), so a rowless or section-less course could never be stamped
+ * and would sit at the head of the cursor forever.
+ */
+export async function getStalePrereqCourses(
+  db: D1Like,
+  term: string,
+  limit: number
+): Promise<CourseKey[]> {
+  if (limit <= 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT c.campus_description AS campus, c.subject, c.course_number AS courseNumber
+         FROM course c
+        WHERE c.term = ?
+          AND EXISTS (SELECT 1 FROM course_section cs
+                       WHERE cs.term = c.term AND IFNULL(cs.campus_description, '') = c.campus_description
+                         AND cs.subject = c.subject AND cs.course_number = c.course_number)
+        ORDER BY COALESCE(c.prereq_synced_at, 0) ASC, 1, 2, 3
         LIMIT ?`
     )
     .bind(term, limit)
-    .all<{ crn: string }>();
-  return results.map((r) => r.crn);
+    .all<{ campus: string; subject: string; courseNumber: string }>();
+  return results.map((r) => ({ term, campus: r.campus, subject: r.subject, courseNumber: r.courseNumber }));
 }
 
 /**
- * Shared WHERE predicate for "view-only term that still needs a details backfill":
- * catalog present (course_section rows exist) AND no completed details pass
- * (no sync_run with kind='details' and status ok/partial). A run that died with
- * status 'error' (or never ran) leaves no qualifying row, so the term stays
- * eligible and is retried. Aliased `t` for the term row.
+ * What a term still lacks for a complete capture (spec §6.1): completeness is
+ * judged from the data, never from `sync_run`. Section gaps are CRNs missing a
+ * fragment stamp (no `section_detail` row = all three); course gaps are
+ * (campus, subject, course) keys of the term's sections missing a facts or
+ * prereq stamp (no `course` row = both).
  */
-const BACKFILL_PENDING_PREDICATE = `
-  t.is_view_only = 1
-  AND EXISTS (SELECT 1 FROM course_section cs WHERE cs.term = t.code)
-  AND NOT EXISTS (
-        SELECT 1 FROM sync_run r
-         WHERE r.term = t.code AND r.kind = 'details'
-           AND r.status IN ('ok', 'partial'))`;
-
-/**
- * The newest historical (view-only) term still needing a course-details backfill,
- * or null when every view-only term is backfilled. Newest term code first so the
- * most-recently-relevant history fills in first.
- */
-export async function getNextBackfillTerm(db: D1Like): Promise<string | null> {
-  const { results } = await db
-    .prepare(
-      `SELECT t.code AS code FROM term t
-        WHERE ${BACKFILL_PENDING_PREDICATE}
-        ORDER BY t.code DESC
-        LIMIT 1`
-    )
-    .all<{ code: string }>();
-  return results[0]?.code ?? null;
+export interface TermGaps {
+  restrictions: string[];
+  extras: string[];
+  crosslist: string[];
+  facts: CourseKey[];
+  prereqs: CourseKey[];
 }
 
-/** Count of view-only terms still pending a details backfill (same predicate). */
-export async function countBackfillTermsPending(db: D1Like): Promise<number> {
-  const { results } = await db
-    .prepare(`SELECT COUNT(*) AS n FROM term t WHERE ${BACKFILL_PENDING_PREDICATE}`)
-    .all<{ n: number }>();
-  return results[0]?.n ?? 0;
+export function gapCount(g: TermGaps): number {
+  return g.restrictions.length + g.extras.length + g.crosslist.length + g.facts.length + g.prereqs.length;
+}
+
+/** The gap lists for one term — two set-based queries in one batch. */
+export async function getTermGaps(db: D1Like, term: string): Promise<TermGaps> {
+  const [sections, courses] = await db.batch([
+    db
+      .prepare(
+        `SELECT cs.crn AS crn,
+                sd.restrictions_synced_at IS NULL AS r,
+                sd.extras_synced_at IS NULL AS e,
+                sd.crosslist_synced_at IS NULL AS x
+           FROM course_section cs
+           LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
+          WHERE cs.term = ?
+            AND (sd.restrictions_synced_at IS NULL OR sd.extras_synced_at IS NULL
+                 OR sd.crosslist_synced_at IS NULL)
+          ORDER BY cs.crn`
+      )
+      .bind(term),
+    db
+      .prepare(
+        `SELECT s.campus AS campus, s.subject AS subject, s.courseNumber AS courseNumber,
+                c.facts_synced_at IS NULL AS f,
+                c.prereq_synced_at IS NULL AS p
+           FROM (SELECT DISTINCT IFNULL(campus_description, '') AS campus, subject,
+                        course_number AS courseNumber
+                   FROM course_section WHERE term = ?) s
+           LEFT JOIN course c
+             ON c.term = ? AND c.campus_description = s.campus
+            AND c.subject = s.subject AND c.course_number = s.courseNumber
+          WHERE c.facts_synced_at IS NULL OR c.prereq_synced_at IS NULL
+          ORDER BY 1, 2, 3`
+      )
+      .bind(term, term),
+  ]);
+  const gaps: TermGaps = { restrictions: [], extras: [], crosslist: [], facts: [], prereqs: [] };
+  for (const row of sections.results as Array<{ crn: string; r: number; e: number; x: number }>) {
+    if (row.r) gaps.restrictions.push(row.crn);
+    if (row.e) gaps.extras.push(row.crn);
+    if (row.x) gaps.crosslist.push(row.crn);
+  }
+  for (const row of courses.results as Array<{
+    campus: string;
+    subject: string;
+    courseNumber: string;
+    f: number;
+    p: number;
+  }>) {
+    const key: CourseKey = { term, campus: row.campus, subject: row.subject, courseNumber: row.courseNumber };
+    if (row.f) gaps.facts.push(key);
+    if (row.p) gaps.prereqs.push(key);
+  }
+  return gaps;
 }
 
 /**
- * Count of view-only terms whose catalog isn't synced (no course_section rows) —
- * these are skipped by the backfill and surfaced as an FYI (sync them first).
+ * A capture that finished (not cut by the deadline) and left gaps behind marks
+ * those gaps as stragglers it couldn't fill (e.g. Banner 500s for a cancelled
+ * CRN). While the term's gap count still equals that run's `gapsAfter`, it is
+ * not re-selected — whatever that run's progress — for this long, so a
+ * transient Banner outage can't park a term forever and stragglers are retried
+ * about weekly. A changed gap count (new sections, an on-view fill) re-queues it.
  */
-export async function countViewOnlyTermsMissingCatalog(db: D1Like): Promise<number> {
-  const { results } = await db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM term t
-        WHERE t.is_view_only = 1
-          AND NOT EXISTS (SELECT 1 FROM course_section cs WHERE cs.term = t.code)`
-    )
-    .all<{ n: number }>();
-  return results[0]?.n ?? 0;
+export const STRAGGLER_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** True when the latest capture's notes say it finished with exactly these gaps left. */
+function stragglerSkip(notes: string | null, gaps: number, startedAt: number | null, now: number): boolean {
+  if (!notes) return false;
+  let n: unknown;
+  try {
+    n = JSON.parse(notes);
+  } catch {
+    return false;
+  }
+  if (!n || typeof n !== "object") return false;
+  const o = n as { gapsAfter?: unknown; stoppedEarly?: unknown };
+  return (
+    o.gapsAfter === gaps &&
+    o.stoppedEarly !== true &&
+    startedAt !== null &&
+    now - startedAt < STRAGGLER_RETRY_MS
+  );
+}
+
+/**
+ * Every synced term (sections present, `last_synced_at` set — dynamic page-cache
+ * terms are out of scope) that still has gaps, active terms first then newest
+ * code. A term whose latest `capture` run finished with the same gap count it
+ * has now is left out (see STRAGGLER_RETRY_MS). Counts are aggregated per
+ * term in SQL (three statements, one batch) — no per-term round trips.
+ */
+export async function listTermsWithGaps(
+  db: D1Like,
+  now: number = Date.now()
+): Promise<Array<{ code: string; isViewOnly: boolean; gaps: number }>> {
+  const [sectionGaps, courseGaps, terms] = await db.batch([
+    db.prepare(
+      `SELECT cs.term AS term,
+              SUM(sd.restrictions_synced_at IS NULL) + SUM(sd.extras_synced_at IS NULL)
+                + SUM(sd.crosslist_synced_at IS NULL) AS n
+         FROM course_section cs
+         LEFT JOIN section_detail sd ON sd.term = cs.term AND sd.crn = cs.crn
+        GROUP BY cs.term`
+    ),
+    db.prepare(
+      `SELECT s.term AS term,
+              SUM(c.facts_synced_at IS NULL) + SUM(c.prereq_synced_at IS NULL) AS n
+         FROM (SELECT DISTINCT term, IFNULL(campus_description, '') AS campus, subject, course_number
+                 FROM course_section) s
+         LEFT JOIN course c
+           ON c.term = s.term AND c.campus_description = s.campus
+          AND c.subject = s.subject AND c.course_number = s.course_number
+        GROUP BY s.term`
+    ),
+    db.prepare(
+      `SELECT t.code AS code, t.is_view_only AS isViewOnly, r.notes AS notes, r.started_at AS startedAt
+         FROM term t
+         LEFT JOIN sync_run r
+           ON r.id = (SELECT MAX(id) FROM sync_run WHERE term = t.code AND kind = 'capture')
+        WHERE t.last_synced_at IS NOT NULL
+        ORDER BY t.is_view_only ASC, t.code DESC`
+    ),
+  ]);
+  const sec = new Map((sectionGaps.results as Array<{ term: string; n: number }>).map((r) => [r.term, r.n]));
+  const crs = new Map((courseGaps.results as Array<{ term: string; n: number }>).map((r) => [r.term, r.n]));
+  const out: Array<{ code: string; isViewOnly: boolean; gaps: number }> = [];
+  for (const t of terms.results as Array<{
+    code: string;
+    isViewOnly: number;
+    notes: string | null;
+    startedAt: number | null;
+  }>) {
+    if (!sec.has(t.code)) continue; // no sections
+    const gaps = (sec.get(t.code) ?? 0) + (crs.get(t.code) ?? 0);
+    if (gaps === 0 || stragglerSkip(t.notes, gaps, t.startedAt, now)) continue;
+    out.push({ code: t.code, isViewOnly: t.isViewOnly === 1, gaps });
+  }
+  return out;
 }
 
 export interface Instructor {

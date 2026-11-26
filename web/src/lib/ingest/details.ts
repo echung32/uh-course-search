@@ -1,43 +1,11 @@
 /**
- * Course-details ingestion (phase 2, slice 1) — the Banner-facing write path for
- * the additive endpoints. Runs AFTER a term's course_section rows exist (a full
- * sync), since the course-catalog pass enumerates the live course set from D1.
- *
- * Two passes:
- *   - filter options: the canonical `get_*` dropdown menus, per term.
- *   - course catalog: academic College/Department/grading/schedule, fetched from
- *     ONE representative CRN per (campus, course). Catalog facts are
- *     campus-specific (the same subject+course at another campus is a different
- *     catalog entry) but uniform within a campus, and have no section-override
- *     slot — so per-(campus,course) dedup is safe. See docs/plans/course-details.md.
+ * Course-details ingestion — the Banner-facing write path for the additive
+ * detail endpoints. Runs AFTER a term's course_section rows exist (a full sync).
+ * Composes the per-fragment fetchers (fragments.ts, courseFacts.ts): filter
+ * option menus, course facts (Banner), restrictions/extras/cross-lists per CRN,
+ * and per-course prerequisites. See docs/plans/course-details.md.
  */
-import {
-  establishSession,
-  getCatalogDetails,
-  getContactCard,
-  getCorequisites,
-  getCourseDescription,
-  getCrossListSections,
-  getFees,
-  getFilterOptions,
-  getLinkedSections,
-  getPrerequisites,
-  getRestrictions,
-  getSyllabus,
-  type FilterKind,
-} from "@/lib/sis/client";
-import { parseCatalogDetails } from "@/lib/sis/parse/catalogDetails";
-import {
-  parseCorequisites,
-  parseCourseDescription,
-  parsePrerequisites,
-} from "@/lib/sis/parse/text";
-import {
-  parseFees,
-  parseRestrictions,
-  parseSectionCrns,
-  parseSyllabus,
-} from "@/lib/sis/parse/sectionDetail";
+import { establishSession, getFilterOptions, type FilterKind } from "@/lib/sis/client";
 import type { SisSession } from "@/lib/sis/types";
 import type { D1Like } from "@/lib/db/types";
 import { catalogFacetKind, deriveCatalogFacet } from "@/lib/db/queries";
@@ -45,31 +13,12 @@ import {
   finishSyncRun,
   replaceFilterOptions,
   startSyncRun,
-  upsertCourse,
-  upsertInstructor,
-  upsertSectionDetail,
+  type CourseKey,
 } from "@/lib/db/upsert";
+import { bannerCourseFacts } from "./courseFacts";
+import { bannerCrossList, fetchCoursePrereqs, fetchExtras, fetchRestrictions } from "./fragments";
 
-const SESSION_MAX_AGE_MS = 27 * 60 * 1000;
-const DEFAULT_COURSE_DELAY_MS = 250; // throttle between per-course catalog fetches
-// Banner silently throttles a session after a few hundred requests, so rotate to
-// a fresh session by request count too (not just age). Budgeted as ~requests per
-// session ÷ requests per item: catalog = 4 fetches/course, instructors = 1/card.
-const CATALOG_PER_SESSION = 25; // ~100 requests
-const ITEMS_PER_SESSION = 80;
-
-/** Re-handshakes if the session is too old or has done too many requests. */
-async function rotateIfNeeded(
-  session: SisSession,
-  term: string,
-  count: number,
-  perSession: number
-): Promise<SisSession> {
-  if (count >= perSession || Date.now() - session.establishedAt > SESSION_MAX_AGE_MS) {
-    return establishSession(term);
-  }
-  return session;
-}
+const DEFAULT_COURSE_DELAY_MS = 250; // throttle between per-item fetches
 
 /** The filter-option lists we persist (subject is handled by the full sync). */
 export const FILTER_KINDS: FilterKind[] = [
@@ -96,15 +45,9 @@ export interface DetailsOptions {
   catalog?: boolean;
   /** Run the per-CRN section-detail pass (default true). The heaviest pass. */
   sections?: boolean;
-  /** Run the per-instructor contact-card pass (default true). */
+  /** Accepted for compatibility; the contact-card pass was removed (ignored). */
   instructors?: boolean;
-  /**
-   * In the catalog pass, also fetch course description / prerequisites /
-   * corequisites (default true). These are 3 of the 4 per-course fetches, so
-   * `text:false` runs a ~4× lighter "college/department only" pass (enough for
-   * the College/Department filters); the text is preserved if already present
-   * (upsertCourse COALESCEs it) and can be filled later.
-   */
+  /** Also fetch per-course prerequisites/corequisites (default true). */
   text?: boolean;
   /** Delay between per-course / per-CRN / per-instructor fetches (ms). */
   courseDelayMs?: number;
@@ -129,7 +72,7 @@ export interface DetailsResult {
 }
 
 /** Persists every filter-option list for a term. */
-async function syncFilterOptions(
+export async function syncFilterOptions(
   db: D1Like,
   session: SisSession,
   term: string,
@@ -186,196 +129,31 @@ export async function materializeCatalogFacets(
   return total;
 }
 
-/**
- * Fetches catalog details for one representative CRN per distinct course in the
- * term and upserts the `course` row.
- */
-async function syncCourseCatalog(
-  db: D1Like,
-  session: SisSession,
-  term: string,
-  delayMs: number,
-  withText: boolean,
-  log: (m: string) => void,
-  crns?: string[]
-): Promise<{ courses: number; status: "ok" | "partial"; session: SisSession }> {
-  // One representative CRN per (campus, subject, course_number). Catalog facts
-  // (college/department/description/prereqs) are campus-specific — the same
-  // subject+course at a different campus is a different catalog entry — but
-  // uniform within a campus, so one CRN per campus suffices. See the plan's
-  // verification note.
+/** Distinct (campus, subject, course) of the term, restricted to the CRNs' courses when scoped. */
+async function termCourses(db: D1Like, term: string, crns?: string[]): Promise<CourseKey[]> {
   let sql =
-    `SELECT campus_description AS campus, subject, course_number AS courseNumber,
-            MIN(crn) AS crn
+    `SELECT DISTINCT IFNULL(campus_description, '') AS campus, subject, course_number AS courseNumber
        FROM course_section WHERE term = ?`;
   const binds: unknown[] = [term];
   if (crns && crns.length > 0) {
-    sql += ` AND (campus_description, subject, course_number) IN (
-              SELECT campus_description, subject, course_number FROM course_section
-                WHERE term = ? AND crn IN (${crns.map(() => "?").join(",")}))`;
-    binds.push(term, ...crns);
+    sql += ` AND crn IN (${crns.map(() => "?").join(",")})`;
+    binds.push(...crns);
   }
-  sql += ` GROUP BY campus_description, subject, course_number
-           ORDER BY campus_description, subject, course_number`;
-  const { results: courses } = await db
+  sql += " ORDER BY 1, 2, 3";
+  const { results } = await db
     .prepare(sql)
     .bind(...binds)
-    .all<{ campus: string; subject: string; courseNumber: string; crn: string }>();
-
-  let done = 0;
-  let since = 0;
-  let status: "ok" | "partial" = "ok";
-  // With text it's 4 fetches/course, without it's 1 — budget the per-session
-  // request count accordingly so a slim pass doesn't re-handshake too often.
-  const perSession = withText ? CATALOG_PER_SESSION : CATALOG_PER_SESSION * 4;
-  for (const c of courses) {
-    const rotated = await rotateIfNeeded(session, term, since, perSession);
-    if (rotated !== session) { session = rotated; since = 0; }
-    since += 1;
-    try {
-      // Catalog always; the three text fragments only when withText.
-      const [catalogHtml, descHtml, prereqHtml, coreqHtml] = await Promise.all([
-        getCatalogDetails(session, term, c.crn),
-        withText ? getCourseDescription(session, term, c.crn) : Promise.resolve(null),
-        withText ? getPrerequisites(session, term, c.crn) : Promise.resolve(null),
-        withText ? getCorequisites(session, term, c.crn) : Promise.resolve(null),
-      ]);
-      await upsertCourse(
-        db,
-        term,
-        c.campus ?? "",
-        c.subject,
-        c.courseNumber,
-        {
-          catalog: parseCatalogDetails(catalogHtml),
-          rawCatalogHtml: catalogHtml,
-          // null leaves existing text untouched (upsertCourse COALESCEs).
-          description: descHtml === null ? null : parseCourseDescription(descHtml),
-          prerequisites: prereqHtml === null ? null : parsePrerequisites(prereqHtml),
-          corequisites: coreqHtml === null ? null : parseCorequisites(coreqHtml),
-          rawDescriptionHtml: descHtml,
-          rawPrereqHtml: prereqHtml,
-          rawCoreqHtml: coreqHtml,
-        },
-        Date.now()
-      );
-      done += 1;
-    } catch (err) {
-      status = "partial";
-      log(`[${term}] ${c.campus} ${c.subject} ${c.courseNumber} FAILED: ${(err as Error).message}`);
-    }
-    if (delayMs > 0) await sleep(delayMs);
-  }
-  log(`[${term}] catalog: ${done}/${courses.length} courses`);
-  return { courses: done, status, session };
+    .all<{ campus: string; subject: string; courseNumber: string }>();
+  return results.map((r) => ({ term, ...r }));
 }
 
-/**
- * Per-CRN section-detail pass — the heaviest (5 endpoints × every CRN). Fetches
- * restrictions / fees / cross-list / linked / syllabus, parses, and
- * upserts `section_detail`.
- */
-async function syncSectionDetails(
-  db: D1Like,
-  session: SisSession,
-  term: string,
-  delayMs: number,
-  log: (m: string) => void,
-  crns?: string[]
-): Promise<{ done: number; status: "ok" | "partial"; session: SisSession }> {
-  let sql = "SELECT crn FROM course_section WHERE term = ?";
-  const binds: unknown[] = [term];
-  if (crns && crns.length > 0) {
-    sql += ` AND crn IN (${crns.map(() => "?").join(",")})`;
-    binds.push(...crns);
-  }
-  sql += " ORDER BY crn";
-  const { results: sections } = await db.prepare(sql).bind(...binds).all<{ crn: string }>();
-
-  let done = 0;
-  let since = 0;
-  let status: "ok" | "partial" = "ok";
-  for (const s of sections) {
-    // 6 fetches/CRN, so rotate roughly every ~16 CRNs to stay near ~100 requests.
-    const rotated = await rotateIfNeeded(session, term, since, Math.ceil(CATALOG_PER_SESSION / 1.5));
-    if (rotated !== session) { session = rotated; since = 0; }
-    since += 1;
-    try {
-      const [restr, fees, xlst, linked, syllabus] = await Promise.all([
-        getRestrictions(session, term, s.crn),
-        getFees(session, term, s.crn),
-        getCrossListSections(session, term, s.crn),
-        getLinkedSections(session, term, s.crn),
-        getSyllabus(session, term, s.crn),
-      ]);
-      await upsertSectionDetail(
-        db,
-        term,
-        s.crn,
-        {
-          restrictions: parseRestrictions(restr),
-          fees: parseFees(fees),
-          crossListCrns: parseSectionCrns(xlst),
-          linkedCrns: parseSectionCrns(linked),
-          syllabus: parseSyllabus(syllabus),
-          rawRestrictionsHtml: restr,
-          rawFeesHtml: fees,
-          rawXlstHtml: xlst,
-          rawLinkedHtml: linked,
-          rawSyllabusHtml: syllabus,
-        },
-        Date.now()
-      );
-      done += 1;
-    } catch (err) {
-      status = "partial";
-      log(`[${term}] section ${s.crn} FAILED: ${(err as Error).message}`);
-    }
-    if (delayMs > 0) await sleep(delayMs);
-  }
-  log(`[${term}] section detail: ${done}/${sections.length} CRNs`);
-  return { done, status, session };
-}
-
-/** Per-instructor contact-card pass over the term's distinct faculty. */
-async function syncInstructors(
-  db: D1Like,
-  session: SisSession,
-  term: string,
-  delayMs: number,
-  log: (m: string) => void,
-  crns?: string[]
-): Promise<{ done: number; status: "ok" | "partial"; session: SisSession }> {
-  let sql =
-    "SELECT DISTINCT banner_id FROM section_faculty WHERE term = ?"
-    + " AND banner_id IS NOT NULL AND banner_id <> ''";
-  const binds: unknown[] = [term];
-  if (crns && crns.length > 0) {
-    sql += ` AND crn IN (${crns.map(() => "?").join(",")})`;
-    binds.push(...crns);
-  }
-  sql += " ORDER BY banner_id";
-  const { results: ids } = await db.prepare(sql).bind(...binds).all<{ banner_id: string }>();
-
-  let done = 0;
-  let since = 0;
-  let status: "ok" | "partial" = "ok";
-  for (const r of ids) {
-    const rotated = await rotateIfNeeded(session, term, since, ITEMS_PER_SESSION);
-    if (rotated !== session) { session = rotated; since = 0; }
-    since += 1;
-    try {
-      const card = await getContactCard(session, r.banner_id, term);
-      await upsertInstructor(db, card, Date.now());
-      done += 1;
-    } catch (err) {
-      status = "partial";
-      log(`[${term}] instructor ${r.banner_id} FAILED: ${(err as Error).message}`);
-    }
-    if (delayMs > 0) await sleep(delayMs);
-  }
-  log(`[${term}] instructors: ${done}/${ids.length}`);
-  return { done, status, session };
+async function termCrns(db: D1Like, term: string, crns?: string[]): Promise<string[]> {
+  if (crns && crns.length > 0) return crns;
+  const { results } = await db
+    .prepare("SELECT crn FROM course_section WHERE term = ? ORDER BY crn")
+    .bind(term)
+    .all<{ crn: string }>();
+  return results.map((r) => r.crn);
 }
 
 /** Orchestrates the course-details passes for a term. */
@@ -389,48 +167,47 @@ export async function syncDetails(
   const doFilters = options.filters ?? !scoped;
   const doCatalog = options.catalog ?? true;
   const doSections = options.sections ?? true;
-  const doInstructors = options.instructors ?? true;
   const withText = options.text ?? true;
-  const delay = options.courseDelayMs ?? DEFAULT_COURSE_DELAY_MS;
+  const delayMs = options.courseDelayMs ?? DEFAULT_COURSE_DELAY_MS;
+  const fetchOpts = { delayMs, log };
 
   const startedAt = Date.now();
   const run = await startSyncRun(db, term, "details", startedAt);
 
-  let session = await establishSession(term);
   let filterKinds = 0;
   let filterOptions = 0;
   let courses = 0;
   let sectionDetails = 0;
-  let instructors = 0;
   let status: "ok" | "partial" | "error" = "ok";
 
   try {
     if (doFilters) {
+      const session = await establishSession(term);
       const f = await syncFilterOptions(db, session, term, log);
       filterKinds = f.kinds;
       filterOptions = f.options;
       if (f.status === "partial") status = "partial";
     }
+    const courseKeys = doCatalog || withText ? await termCourses(db, term, options.crns) : [];
     if (doCatalog) {
-      const c = await syncCourseCatalog(db, session, term, delay, withText, log, options.crns);
-      courses = c.courses;
-      session = c.session;
-      if (c.status === "partial") status = "partial";
+      const c = await bannerCourseFacts(db, term, courseKeys, fetchOpts);
+      courses = c.done;
+      if (c.failed > 0) status = "partial";
       // Refresh the materialized College/Department menus from the just-written
       // course rows so the read path serves them without a per-request derive.
       await materializeCatalogFacets(db, term, log);
     }
     if (doSections) {
-      const sd = await syncSectionDetails(db, session, term, delay, log, options.crns);
-      sectionDetails = sd.done;
-      session = sd.session;
-      if (sd.status === "partial") status = "partial";
+      const crns = await termCrns(db, term, options.crns);
+      const r = await fetchRestrictions(db, term, crns, fetchOpts);
+      const e = await fetchExtras(db, term, crns, fetchOpts);
+      const x = await bannerCrossList(db, term, crns, fetchOpts);
+      sectionDetails = r.done;
+      if (r.failed.length > 0 || e.failed.length > 0 || x.failed.length > 0) status = "partial";
     }
-    if (doInstructors) {
-      const ins = await syncInstructors(db, session, term, delay, log, options.crns);
-      instructors = ins.done;
-      session = ins.session;
-      if (ins.status === "partial") status = "partial";
+    if (withText) {
+      const p = await fetchCoursePrereqs(db, term, courseKeys, fetchOpts);
+      if (p.failed > 0) status = "partial";
     }
 
     await finishSyncRun(db, run, {
@@ -454,7 +231,7 @@ export async function syncDetails(
     filterOptions,
     courses,
     sectionDetails,
-    instructors,
+    instructors: 0,
     status,
   };
 }
