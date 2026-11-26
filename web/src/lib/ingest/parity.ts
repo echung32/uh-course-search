@@ -16,7 +16,7 @@
 import type { D1Like } from "@/lib/db/types";
 import { caCourseDesc, caCourseGrading, caCourses, caCrossList, crseavailDelayMs } from "@/lib/crseavail/client";
 import { buildCourseFacts, crossListMap } from "@/lib/crseavail/map";
-import { campusCodeMap, checkUnitCourses, checkUnitGrading, loadCrnIndex } from "./courseFacts";
+import { checkUnitCourses, checkUnitGrading, loadCrnIndex, normalizeDescription, unitCampusCodes } from "./courseFacts";
 
 export type ParityField =
   | "gradingModes"
@@ -46,9 +46,27 @@ export interface ParityCoverage {
   unitsUnmapped: number;
 }
 
+/**
+ * Description differences that are not crseavail errors, counted apart so the
+ * operator sees what ingestion would change. Banner's description fragment for
+ * the representative CRN appends that section's "Section information text",
+ * which crseavail's course text never carries: those are compared without it
+ * and counted in `sectionTextDropped` (ingestion would replace them with the
+ * course text alone). `missingInCrseavail`: crseavail has no text, so ingestion
+ * keeps the stored one (COALESCE) and nothing is compared.
+ */
+export interface DescriptionNotes {
+  sectionTextDropped: number;
+  missingInCrseavail: number;
+}
+
+/** Banner's appended per-section text (after the course description). */
+const SECTION_TEXT = /\s*Section information text:[\s\S]*$/;
+
 export interface ParityReport {
   term: string;
   fields: Record<ParityField, ParityFieldReport>;
+  descriptionNotes: DescriptionNotes;
   coverage: ParityCoverage;
   /** True when the crseavail cross-list fetch failed (crossList then has compared 0). */
   crossListFailed: boolean;
@@ -89,7 +107,8 @@ export async function crseavailParity(
     else if (r.examples.length < MAX_EXAMPLES) r.examples.push({ key, stored, crseavail: ca });
   };
 
-  const [codes, { index, perUnit }] = await Promise.all([campusCodeMap(db), loadCrnIndex(db, term)]);
+  const { index, perUnit } = await loadCrnIndex(db, term);
+  const codes = await unitCampusCodes(db, perUnit);
   const { results } = await db
     .prepare(
       `SELECT campus_description AS campus, subject, course_number AS cn, grading_modes, credit_breakdown,
@@ -112,6 +131,7 @@ export async function crseavailParity(
 
   let unitsFailed = 0;
   let unitsRejected = 0;
+  const descriptionNotes: DescriptionNotes = { sectionTextDropped: 0, missingInCrseavail: 0 };
   let unitsOk = 0;
   let unitsUnmapped = 0;
   const delay = crseavailDelayMs();
@@ -156,7 +176,12 @@ export async function crseavailParity(
       if (s.college_code !== null) record("collegeCode", k, s.college_code, f.collegeCode, s.college_code === f.collegeCode);
       if (s.department_code !== null) record("departmentCode", k, s.department_code, f.departmentCode, s.department_code === f.departmentCode);
       if (s.description !== null) {
-        record("description", k, s.description, f.description, s.description.trimEnd() === (f.description ?? "").trimEnd());
+        if (f.description === null) descriptionNotes.missingInCrseavail += 1;
+        else {
+          const course = s.description.replace(SECTION_TEXT, "");
+          if (course !== s.description) descriptionNotes.sectionTextDropped += 1;
+          record("description", k, s.description, f.description, normalizeDescription(course) === normalizeDescription(f.description));
+        }
       }
     }
   }
@@ -197,5 +222,5 @@ export async function crseavailParity(
     !crossListFailed &&
     factsCompared &&
     FIELDS.every((f) => fields[f].compared === 0 || fields[f].rate >= PASS_RATE);
-  return { term, fields, coverage, crossListFailed, pass };
+  return { term, fields, descriptionNotes, coverage, crossListFailed, pass };
 }
