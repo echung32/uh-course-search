@@ -199,6 +199,50 @@ test.describe("crseavail map", () => {
     expect(buildCampusCodeMap(pairs).get("UH Manoa")).toBe("MAN");
   });
 
+  test("buildCampusCodeMap: online (WWW) and other campuses' rooms never win", async () => {
+    const { buildCampusCodeMap } = await import("../src/lib/crseavail/map");
+    const pairs = (desc: string, counts: Record<string, number>) =>
+      Object.entries(counts).flatMap(([code, n]) => Array.from({ length: n }, () => ({ campusDescription: desc, code })));
+    // Real 2026-11 prod samples: online meetings outnumber in-person ones at these campuses.
+    const all = [
+      ...pairs("Leeward Community College", { WWW: 46, LEE: 16 }),
+      ...pairs("Honolulu Community College", { WWW: 31, HON: 24, MAN: 8 }),
+      ...pairs("Distance Education", { WWW: 50 }),
+      ...pairs("Lanai Education Center", { WWW: 7, OC: 43 }),
+    ];
+    const noList = buildCampusCodeMap(all);
+    expect(noList.get("Leeward Community College")).toBe("LEE");
+    expect(noList.get("Honolulu Community College")).toBe("HON");
+    expect(noList.has("Distance Education")).toBe(false);
+    const valid = new Set(["HON", "LEE", "MAN"]);
+    const m = buildCampusCodeMap(all, valid);
+    expect(m.get("Leeward Community College")).toBe("LEE");
+    expect(m.get("Honolulu Community College")).toBe("HON");
+    expect(m.has("Lanai Education Center")).toBe(false); // OC isn't a crseavail campus
+  });
+
+  test("ownCampusCodes keeps only the campus with the most sections for each code", async () => {
+    const { ownCampusCodes } = await import("../src/lib/crseavail/map");
+    const codes = new Map([
+      ["Leeward Community College", "LEE"],
+      ["Waianae Educational Center-LEE", "LEE"],
+      ["University of Hawaii at Manoa", "MAN"],
+      ["Old Campus", "OLD"], // no sections this term
+    ]);
+    const perUnit = new Map([
+      ["Leeward Community College|ENG", 40],
+      ["Leeward Community College|MATH", 30],
+      ["Waianae Educational Center-LEE|ENG", 61],
+      ["University of Hawaii at Manoa|ICS", 50],
+    ]);
+    expect(ownCampusCodes(codes, perUnit)).toEqual(
+      new Map([
+        ["Leeward Community College", "LEE"],
+        ["University of Hawaii at Manoa", "MAN"],
+      ])
+    );
+  });
+
   test("deriveScheduleTypes formats Desc  CODE", async () => {
     const { deriveScheduleTypes } = await import("../src/lib/crseavail/map");
     const raw = JSON.stringify({

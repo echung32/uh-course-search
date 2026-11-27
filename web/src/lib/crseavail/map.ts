@@ -21,9 +21,23 @@ export function extractCampusPairs(rawJson: string): Array<{ campusDescription: 
   return out;
 }
 
-export function buildCampusCodeMap(pairs: Array<{ campusDescription: string; code: string }>): Map<string, string> {
+/** Meeting-location codes that are never a section's campus (online classes meet at "WWW"). */
+const VIRTUAL_CAMPUS_CODES = new Set(["WWW"]);
+
+/**
+ * Campus description → the majority meeting-campus code among its sections.
+ * A meeting's `campus` is where the class meets, not the section's campus, so
+ * online meetings ("WWW") and other campuses' rooms are noise: with `valid`
+ * (crseavail's own campus codes, from `subjects`) only those codes count;
+ * without it, only the virtual codes are dropped.
+ */
+export function buildCampusCodeMap(
+  pairs: Array<{ campusDescription: string; code: string }>,
+  valid?: Set<string>
+): Map<string, string> {
   const counts = new Map<string, Map<string, number>>();
   for (const { campusDescription, code } of pairs) {
+    if (valid ? !valid.has(code) : VIRTUAL_CAMPUS_CODES.has(code)) continue;
     const m = counts.get(campusDescription) ?? new Map<string, number>();
     m.set(code, (m.get(code) ?? 0) + 1);
     counts.set(campusDescription, m);
@@ -36,6 +50,29 @@ export function buildCampusCodeMap(pairs: Array<{ campusDescription: string; cod
     out.set(desc, best);
   }
   return out;
+}
+
+/**
+ * Keeps, for each code, only the campus that owns it: the description with the
+ * most sections this term (`perUnit` keys are `${campus}|${subject}`). Satellite
+ * campuses whose rooms share a code (e.g. "Waianae Educational Center-LEE" →
+ * LEE) have their own Banner campus that crseavail doesn't list, so querying
+ * the owner's code for them would return the owner's sections (or nothing).
+ * They are left unmapped and go to Banner.
+ */
+export function ownCampusCodes(codes: Map<string, string>, perUnit: Map<string, number>): Map<string, string> {
+  const sections = new Map<string, number>();
+  for (const [u, n] of perUnit) {
+    const campus = u.slice(0, u.lastIndexOf("|"));
+    sections.set(campus, (sections.get(campus) ?? 0) + n);
+  }
+  const owner = new Map<string, { campus: string; n: number }>();
+  for (const [campus, code] of codes) {
+    const n = sections.get(campus) ?? 0;
+    const cur = owner.get(code);
+    if (n > 0 && (!cur || n > cur.n)) owner.set(code, { campus, n });
+  }
+  return new Map([...owner].map(([code, o]) => [o.campus, code]));
 }
 
 type Facts = Omit<CourseFacts, "collegeName" | "department" | "scheduleTypes">;

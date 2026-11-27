@@ -35,6 +35,7 @@ import {
   caCourseDesc,
   caCourseGrading,
   caCourses,
+  caSubjects,
   crseavailDelayMs,
   crseavailEnabled,
   CrseavailError,
@@ -45,6 +46,7 @@ import {
   buildCourseFacts,
   deriveScheduleTypes,
   extractCampusPairs,
+  ownCampusCodes,
   type CrnIndex,
 } from "@/lib/crseavail/map";
 import { logCa } from "@/lib/log";
@@ -128,8 +130,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * trimmed. Stored text is often Banner-parsed while crseavail's is raw, so a
  * plain `!==` would flag formatting-only differences as changes.
  */
+const NAMED_ENTITIES: Record<string, string> = {
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201c",
+  rdquo: "\u201d",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  hellip: "\u2026",
+};
+
 export function normalizeDescription(s: string): string {
   return s
+    .replace(/&(lsquo|rsquo|ldquo|rdquo|ndash|mdash|hellip);/g, (_, n: string) => NAMED_ENTITIES[n])
+    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&nbsp;/g, " ")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -189,30 +204,56 @@ export async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: C
   return { index, perUnit };
 }
 
-// Campus description → crseavail campus code, from raw_json across all terms.
-// Cached per process (per DB handle, so a test's fresh DB gets a fresh map).
-const campusMaps = new WeakMap<D1Like, Promise<Map<string, string>>>();
+// Campus description → crseavail campus code, from raw_json across all terms,
+// restricted to the campus codes crseavail itself lists (one `subjects` call).
+// Cached per process (per DB handle, so a test's fresh DB gets a fresh map);
+// a map built without that list (subjects failed or empty) is not cached.
+const campusMaps = new WeakMap<D1Like, Promise<{ map: Map<string, string>; validated: boolean }>>();
 
-export function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
+export async function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
   let p = campusMaps.get(db);
   if (!p) {
-    p = loadCampusCodeMap(db).catch((e) => {
-      campusMaps.delete(db);
-      throw e;
-    });
+    p = loadCampusCodeMap(db);
     campusMaps.set(db, p);
   }
-  return p;
+  try {
+    const r = await p;
+    if (!r.validated) campusMaps.delete(db);
+    return r.map;
+  } catch (e) {
+    campusMaps.delete(db);
+    throw e;
+  }
 }
 
-async function loadCampusCodeMap(db: D1Like): Promise<Map<string, string>> {
+/** campusCodeMap narrowed to each code's owning campus for this term (see ownCampusCodes). */
+export async function unitCampusCodes(db: D1Like, perUnit: Map<string, number>): Promise<Map<string, string>> {
+  return ownCampusCodes(await campusCodeMap(db), perUnit);
+}
+
+/** crseavail's campus codes, or null when `subjects` fails or lists none. */
+async function crseavailCampusCodes(): Promise<Set<string> | null> {
+  try {
+    const rows = await caSubjects();
+    const codes = new Set(rows.map((r) => r.ssbsectCampCode));
+    logCa(`subjects: ${rows.length} rows, campuses ${[...codes].sort().join(",")}`);
+    return codes.size > 0 ? codes : null;
+  } catch (err) {
+    if (!(err instanceof CrseavailError)) throw err;
+    logCa(`subjects: failed (${err.reason}); campus codes from meetings only`);
+    return null;
+  }
+}
+
+async function loadCampusCodeMap(db: D1Like): Promise<{ map: Map<string, string>; validated: boolean }> {
   const { results: descs } = await db
     .prepare(
       `SELECT DISTINCT campus_description AS d FROM course_section
         WHERE campus_description IS NOT NULL AND campus_description <> ''`
     )
     .all<{ d: string }>();
-  if (descs.length === 0) return new Map();
+  if (descs.length === 0) return { map: new Map(), validated: false };
+  const valid = await crseavailCampusCodes();
   // Only rows carrying a non-null meeting campus (raw_json is compact JSON).
   const res = await db.batch(
     descs.map(({ d }) =>
@@ -234,7 +275,7 @@ async function loadCampusCodeMap(db: D1Like): Promise<Map<string, string>> {
       }
     }
   }
-  return buildCampusCodeMap(pairs);
+  return { map: buildCampusCodeMap(pairs, valid ?? undefined), validated: valid !== null };
 }
 
 /**
@@ -414,7 +455,8 @@ export async function syncCourseFacts(
   const toPool = (cs: TermCourse[]) => pool.push(...(opts.mode === "gaps" ? cs.filter(isGap) : cs));
 
   if (enabled && units.length > 0) {
-    const [codes, { index, perUnit }] = await Promise.all([campusCodeMap(db), loadCrnIndex(db, term)]);
+    const { index, perUnit } = await loadCrnIndex(db, term);
+    const codes = await unitCampusCodes(db, perUnit);
     for (const u of units) u.sections = perUnit.get(`${u.campus}|${u.subject}`) ?? 0;
     const names = new Map<string, Promise<{ collegeName: string | null; department: string | null }>>();
     const nameSession = bannerSessions(term, FACTS_PER_SESSION);

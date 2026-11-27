@@ -247,6 +247,8 @@ test("normalizeDescription decodes entities and collapses whitespace", () => {
   // &amp; decodes last: an escaped entity stays literal.
   expect(cf.normalizeDescription("&amp;lt;")).toBe("&lt;");
   expect(cf.normalizeDescription("a b")).not.toBe(cf.normalizeDescription("a c"));
+  // Typographic named and numeric entities (Banner emits them; crseavail sends the characters).
+  expect(cf.normalizeDescription("Hawai&lsquo;i &ldquo;x&rdquo; 1&ndash;2 &#8217;&#x2019;")).toBe("Hawai\u2018i \u201cx\u201d 1\u20132 \u2019\u2019");
 });
 
 test("breaker: preflight rejection or 5 consecutive rejections trip; an accepted unit resets", () => {
@@ -317,6 +319,25 @@ test("parity reports a mismatched description", async () => {
   expect(r.fields.description.rate).toBeLessThan(1);
   expect(r.pass).toBe(false);
   expect(r.fields.description.examples[0].stored).toBe("X");
+});
+
+test("parity compares course text: formatting and Banner's appended section text are not mismatches", async () => {
+  const { syncDetails } = await import("../src/lib/ingest/details");
+  const { crseavailParity } = await import("../src/lib/ingest/parity");
+  process.env.CRSEAVAIL = "";
+  await syncDetails(f.db, TERM, { courseDelayMs: 0 });
+  const upd = (sql: string, cn: string) =>
+    f.raw.prepare(`UPDATE course SET description = ${sql} WHERE term = ? AND subject = 'ICS' AND course_number = ?`).run(TERM, cn);
+  upd(`description || '\nSection information text:\nTextbook Cost: $0'`, "141");
+  upd(`REPLACE(description, '. An', '.  An&nbsp;')`, "111");
+  const stored = f.raw
+    .prepare("SELECT description FROM course WHERE term = ? AND subject = 'ICS' AND course_number = '111'")
+    .get(TERM) as { description: string };
+  expect(stored.description).toContain(".  An&nbsp;"); // the edit took
+  const r = await crseavailParity(f.db, TERM);
+  expect(r.fields.description.rate).toBe(1);
+  expect(r.descriptionNotes).toEqual({ sectionTextDropped: 1, missingInCrseavail: 0 });
+  expect(r.pass).toBe(true);
 });
 
 test("parity ignores cross-list rows that were never fetched", async () => {
