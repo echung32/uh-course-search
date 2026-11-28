@@ -165,6 +165,49 @@ test("unmapped campus goes to Banner without crashing", async () => {
   for (const c of rows) expect(c.facts_source).toBe("banner");
 });
 
+test("a pseudo-campus that outnumbers its code's owner this term stays unmapped (summer)", async () => {
+  // Summer-term shape (e.g. 201840: "Outreach College-UHM" 701 vs Manoa 1):
+  // a pseudo-campus whose meetings sit in Manoa rooms has more sections than
+  // Manoa this term but far fewer across all terms. It sorts first, so if it
+  // owned MAN its unit (crseavail has none of its sections) would be the
+  // run's preflight, fail the count check and trip the breaker.
+  const copy = (where: string, set: string) => {
+    f.raw.exec("DROP TABLE IF EXISTS temp.cs_copy");
+    f.raw.exec(`CREATE TEMP TABLE cs_copy AS SELECT * FROM course_section WHERE ${where}`);
+    f.raw.exec(`UPDATE cs_copy SET ${set}`);
+    f.raw.exec("INSERT INTO course_section SELECT * FROM cs_copy");
+  };
+  const manoaNow = (
+    f.raw.prepare("SELECT COUNT(*) n FROM course_section WHERE term = ? AND campus_description = 'Manoa'").get(TERM) as {
+      n: number;
+    }
+  ).n;
+  // The pseudo-campus outnumbers Manoa this term (meeting campus MAN, from 10004).
+  for (let i = 0; i < manoaNow + 5; i++) {
+    const crn = `9${String(i).padStart(4, "0")}`;
+    copy(
+      `term = '${TERM}' AND crn = '10004'`,
+      `crn = '${crn}', subject = 'ZZZ', course_number = '100', campus_description = 'Aaa Outreach',
+       raw_json = json_set(raw_json, '$.campusDescription', 'Aaa Outreach', '$.subject', 'ZZZ',
+                           '$.courseNumber', '100', '$.courseReferenceNumber', '${crn}')`
+    );
+  }
+  // …but Manoa dwarfs it across all terms (three earlier terms of Manoa sections).
+  for (const t of ["202710", "202630", "202610"]) copy(`term = '${TERM}' AND campus_description = 'Manoa'`, `term = '${t}'`);
+
+  const breaker = cf.newRunBreaker();
+  const r = await cf.syncCourseFacts(f.db, TERM, { mode: "gaps", delayMs: 0, runBreaker: breaker });
+  expect(r.rejections).toEqual({ "no-campus-code": 1 }); // only the pseudo-campus unit
+  expect(r.breakerTripped).toBe(false);
+  expect(breaker.tripped).toBe(false); // a later term in the same run still uses crseavail
+  expect(r.source).toBe("crseavail");
+  const manoa = f.raw
+    .prepare("SELECT facts_source FROM course WHERE term = ? AND campus_description = 'Manoa'")
+    .all(TERM) as Array<{ facts_source: string }>;
+  expect(manoa.length).toBe(7);
+  for (const c of manoa) expect(c.facts_source).toBe("crseavail");
+});
+
 test("daily mode caps Banner fallback", async () => {
   delete process.env.CRSEAVAIL;
   const r = await cf.syncCourseFacts(f.db, TERM, { mode: "all", bannerCap: 1, delayMs: 0 });
