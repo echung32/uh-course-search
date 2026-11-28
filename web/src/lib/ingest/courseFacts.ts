@@ -206,11 +206,18 @@ export async function loadCrnIndex(db: D1Like, term: string): Promise<{ index: C
 
 // Campus description → crseavail campus code, from raw_json across all terms,
 // restricted to the campus codes crseavail itself lists (one `subjects` call).
+// `totals` is each description's section count across all terms, which decides
+// which description owns a code (see ownCampusCodes).
 // Cached per process (per DB handle, so a test's fresh DB gets a fresh map);
 // a map built without that list (subjects failed or empty) is not cached.
-const campusMaps = new WeakMap<D1Like, Promise<{ map: Map<string, string>; validated: boolean }>>();
+interface CampusCodes {
+  map: Map<string, string>;
+  totals: Map<string, number>;
+  validated: boolean;
+}
+const campusMaps = new WeakMap<D1Like, Promise<CampusCodes>>();
 
-export async function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
+async function loadCampusCodes(db: D1Like): Promise<CampusCodes> {
   let p = campusMaps.get(db);
   if (!p) {
     p = loadCampusCodeMap(db);
@@ -219,16 +226,17 @@ export async function campusCodeMap(db: D1Like): Promise<Map<string, string>> {
   try {
     const r = await p;
     if (!r.validated) campusMaps.delete(db);
-    return r.map;
+    return r;
   } catch (e) {
     campusMaps.delete(db);
     throw e;
   }
 }
 
-/** campusCodeMap narrowed to each code's owning campus for this term (see ownCampusCodes). */
+/** The campus code map narrowed to each code's owning campus for this term (see ownCampusCodes). */
 export async function unitCampusCodes(db: D1Like, perUnit: Map<string, number>): Promise<Map<string, string>> {
-  return ownCampusCodes(await campusCodeMap(db), perUnit);
+  const { map, totals } = await loadCampusCodes(db);
+  return ownCampusCodes(map, perUnit, totals);
 }
 
 /** crseavail's campus codes, or null when `subjects` fails or lists none. */
@@ -245,14 +253,16 @@ async function crseavailCampusCodes(): Promise<Set<string> | null> {
   }
 }
 
-async function loadCampusCodeMap(db: D1Like): Promise<{ map: Map<string, string>; validated: boolean }> {
+async function loadCampusCodeMap(db: D1Like): Promise<CampusCodes> {
   const { results: descs } = await db
     .prepare(
-      `SELECT DISTINCT campus_description AS d FROM course_section
-        WHERE campus_description IS NOT NULL AND campus_description <> ''`
+      `SELECT campus_description AS d, COUNT(*) AS n FROM course_section
+        WHERE campus_description IS NOT NULL AND campus_description <> ''
+        GROUP BY campus_description`
     )
-    .all<{ d: string }>();
-  if (descs.length === 0) return { map: new Map(), validated: false };
+    .all<{ d: string; n: number }>();
+  const totals = new Map(descs.map(({ d, n }) => [d, n]));
+  if (descs.length === 0) return { map: new Map(), totals, validated: false };
   const valid = await crseavailCampusCodes();
   // Only rows carrying a non-null meeting campus (raw_json is compact JSON).
   const res = await db.batch(
@@ -275,7 +285,7 @@ async function loadCampusCodeMap(db: D1Like): Promise<{ map: Map<string, string>
       }
     }
   }
-  return { map: buildCampusCodeMap(pairs, valid ?? undefined), validated: valid !== null };
+  return { map: buildCampusCodeMap(pairs, valid ?? undefined), totals, validated: valid !== null };
 }
 
 /**

@@ -54,25 +54,36 @@ export function buildCampusCodeMap(
 
 /**
  * Keeps, for each code, only the campus that owns it: the description with the
- * most sections this term (`perUnit` keys are `${campus}|${subject}`). Satellite
+ * most sections across **all terms** (`totals`), mapped only when it has
+ * sections this term (`perUnit` keys are `${campus}|${subject}`). Satellite
  * campuses whose rooms share a code (e.g. "Waianae Educational Center-LEE" →
  * LEE) have their own Banner campus that crseavail doesn't list, so querying
  * the owner's code for them would return the owner's sections (or nothing).
  * They are left unmapped and go to Banner.
+ *
+ * Ownership is judged across all terms, not this one, because a satellite can
+ * outnumber its owner in a single term: in summer terms "Outreach College-UHM"
+ * (701 sections in 201840) dwarfs "University of Hawaii at Manoa" (1), and
+ * "General Funds" (90) beats "Windward Community College" (26). Handing them
+ * MAN/WIN queried crseavail for sections it doesn't list under those codes, so
+ * the first unit failed the count check and tripped the run's breaker.
  */
-export function ownCampusCodes(codes: Map<string, string>, perUnit: Map<string, number>): Map<string, string> {
-  const sections = new Map<string, number>();
-  for (const [u, n] of perUnit) {
-    const campus = u.slice(0, u.lastIndexOf("|"));
-    sections.set(campus, (sections.get(campus) ?? 0) + n);
-  }
+export function ownCampusCodes(
+  codes: Map<string, string>,
+  perUnit: Map<string, number>,
+  totals: Map<string, number>
+): Map<string, string> {
+  const present = new Set<string>();
+  for (const [u, n] of perUnit) if (n > 0) present.add(u.slice(0, u.lastIndexOf("|")));
   const owner = new Map<string, { campus: string; n: number }>();
   for (const [campus, code] of codes) {
-    const n = sections.get(campus) ?? 0;
+    const n = totals.get(campus) ?? 0;
     const cur = owner.get(code);
-    if (n > 0 && (!cur || n > cur.n)) owner.set(code, { campus, n });
+    if (!cur || n > cur.n) owner.set(code, { campus, n });
   }
-  return new Map([...owner].map(([code, o]) => [o.campus, code]));
+  const out = new Map<string, string>();
+  for (const [code, o] of owner) if (present.has(o.campus)) out.set(o.campus, code);
+  return out;
 }
 
 type Facts = Omit<CourseFacts, "collegeName" | "department" | "scheduleTypes">;

@@ -235,12 +235,66 @@ test.describe("crseavail map", () => {
       ["Waianae Educational Center-LEE|ENG", 61],
       ["University of Hawaii at Manoa|ICS", 50],
     ]);
-    expect(ownCampusCodes(codes, perUnit)).toEqual(
+    const totals = new Map([
+      ["Leeward Community College", 20000],
+      ["Waianae Educational Center-LEE", 1500],
+      ["University of Hawaii at Manoa", 90000],
+      ["Old Campus", 300],
+    ]);
+    expect(ownCampusCodes(codes, perUnit, totals)).toEqual(
       new Map([
         ["Leeward Community College", "LEE"],
         ["University of Hawaii at Manoa", "MAN"],
       ])
     );
+  });
+
+  test("ownCampusCodes judges ownership across all terms, not the one term (summer)", async () => {
+    const { ownCampusCodes } = await import("../src/lib/crseavail/map");
+    // Summer 2018 (201840) as stored in prod: pseudo-campuses outnumber the
+    // real ones this term, but not across all terms.
+    const codes = new Map([
+      ["University of Hawaii at Manoa", "MAN"],
+      ["Outreach College-UHM", "MAN"],
+      ["Outreach College GR Class-UHM", "MAN"],
+      ["Windward Community College", "WIN"],
+      ["General Funds", "WIN"],
+    ]);
+    const perUnit = new Map([
+      ["University of Hawaii at Manoa|ENG", 1],
+      ["Outreach College-UHM|ENG", 701],
+      ["Outreach College GR Class-UHM|ENG", 55],
+      ["Windward Community College|ENG", 26],
+      ["General Funds|ABRP", 90],
+    ]);
+    const totals = new Map([
+      ["University of Hawaii at Manoa", 90311],
+      ["Outreach College-UHM", 9320],
+      ["Outreach College GR Class-UHM", 2021],
+      ["Windward Community College", 5066],
+      ["General Funds", 1028],
+    ]);
+    expect(ownCampusCodes(codes, perUnit, totals)).toEqual(
+      new Map([
+        ["University of Hawaii at Manoa", "MAN"],
+        ["Windward Community College", "WIN"],
+      ])
+    );
+  });
+
+  test("ownCampusCodes leaves a code unmapped when its owner has no sections this term", async () => {
+    const { ownCampusCodes } = await import("../src/lib/crseavail/map");
+    const codes = new Map([
+      ["Leeward Community College", "LEE"],
+      ["Waianae Educational Center-LEE", "LEE"],
+    ]);
+    // Only the satellite has sections: querying LEE would return Leeward's (none).
+    const perUnit = new Map([["Waianae Educational Center-LEE|ENG", 3]]);
+    const totals = new Map([
+      ["Leeward Community College", 20000],
+      ["Waianae Educational Center-LEE", 1500],
+    ]);
+    expect(ownCampusCodes(codes, perUnit, totals)).toEqual(new Map());
   });
 
   test("deriveScheduleTypes formats Desc  CODE", async () => {
